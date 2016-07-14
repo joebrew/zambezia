@@ -7,7 +7,7 @@ output:
   html_document:
     toc: true
     toc_float: true
-    theme: united
+    theme: yeti
 ---
 
 ```{r, echo = FALSE, warning = FALSE, message = FALSE, comment = NA, error= FALSE, cache = FALSE}
@@ -21,6 +21,7 @@ library(ggplot2)
 # library(dplyr)
 library(rgeos)
 library(RColorBrewer)
+library(Rmisc)
 
 # Basic knitr options
 opts_chunk$set(comment = NA, 
@@ -99,85 +100,106 @@ mop <- spTransform(mop, CRS("+init=epsg:3347"))
 
 # Introduction
 
-Bla bla bla
+This document provides a basic overview of two different geospatial issues related to to the Mopeia/Zambezia census and associated assignation of spray/no-spray zones:
 
-# Cluster creation
+1. The identification of areas not yet censed through the generation of interactive satellite visualizations overlaid with cenus location data.
 
-## Using Hclust
+2. The algorithmic creation of buffered clusters for the designation of spray vs. no-spray zones.
+
+This is an internal document meant to provide an overview of methodology/approach. Its results are preliminary, and the examples herein are just that: _examples_. 
+
+# Census data collection validation
+
+Data is actively being collected from the Mopeia area of Zambezia. One concern of the data collection is team is the completeness of the data being collected (ie, that all houses are censed). One way to ensure that houses are not being missed is to overlay the locations of censed houses with satellite images, followed by manual inspection of the overlays in order to identify not yet censed structures.
+
+## Interactive (ad-hoc) examination
+
+
+The below map is "interactive" in two ways: (1) it can be zoomed and scrolled so as to explore different areas and (2) locations (blue dots) can be clicked to reveal further information about the structure in question.
 
 ```{r}
-library(fields)
-max_km <- 1
-lon <- census_spatial$lon
-lat <- census_spatial$lat
-coors <- data.frame(lon,lat)
+mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
+proj4string(mop_ll) <- proj4string(zam)
 
-#distance matrix
-dist <- rdist.earth(coors,miles = F,R=6371)
+leaflet(mop_ll) %>%
+  addProviderTiles("Esri.WorldImagery") %>%
+  addPolylines(color = 'red') %>%
+  # addPolygons(stroke = FALSE, 
+  #             smoothFactor = 0.2, 
+  #             fillOpacity = 0.25,
+  #             col = 'red') %>%
+  addCircleMarkers(lng = census$lng,
+  lat = census$lat,
+  color = colors,
+  fillColor = 'blue',
+  radius = 2.5,
+  opacity = 0,
+  fillOpacity = 0.5,
+  popup = paste0(census$META_INSTANCE_NAME, '\nvillage: ',
+  census$LOCAL_VILLAGE_NAME))
+```
 
-#clustering
-fit <- hclust(as.dist(dist), method = "single")
-clusters <- cutree(fit,h = max_km)
+The above map is useful for manual _ad-hoc_ inspection. 
 
-# Get centroids
-centroids <- data.frame(census_spatial)
-centroids$cluster <- clusters
-centroids <- centroids %>%
-  group_by(cluster) %>%
-  summarise(lon = mean(lon),
-            lat = mean(lat))
-coordinates(centroids) <- ~lon+lat
-proj4string(centroids) <- CRS(original_proj4string)
-centroids <- spTransform(centroids, CRS("+init=epsg:3347"))
+## Static (systematic) examination
 
-plot(mop)
-points(centroids)
+However, we can also "grid" our area off and inspect each sector in a more systematic fashion.  What follows are examples of gridded areas for inspection by the data collection team. At this resolution, we would need to check approximately 300,000 gridded maps to ensure complete coverage for Mopeia. Though that number sounds daunting, the time this manual check takes could be rlatively low since (a) a majority of areas are known _a priori_ to have no inhabitants and therefore need no check, and (b) the generation of these maps requires no manual work.
 
-# Buffer around the centroids
-centroids_buffered <- gBuffer(SpatialPoints(centroids), byid = TRUE, width = 2000)
+What follows is a (random) sample of 4 of what these static maps look like.
 
-# # Buffer around the points
-# points_buffered <- 
-#   gBuffer(SpatialPoints(census_spatial[clusters == 1,]), 
-#           width = 1000)
+```{r}
+# 1000 x iterations
+# 490 y iterations
 
+# Define the boundary box
+bb <- bbox(mop_ll)
+xs <- as.numeric(bb[1,])
+ys <- as.numeric(bb[2,])
 
-# Conversion of projections
-proj4string(points_buffered) <- proj4string(points_buffered)
-proj4string(centroids_buffered) <- proj4string(census_spatial)
+# Define a dataframe of limits
+xl <- seq(min(xs), max(xs), by = 0.1)
+yl <- seq(min(ys), max(ys), by = 0.1)
+b_df <- 
+  expand.grid(x_min = xl, 
+              y_min = yl)#,
+              # x_max = xl,
+              # y_max = yl)
+# b_df <- b_df %>% filter(x_min < x_max,
+#                         y_min < y_max)
 
-cols <- colorRampPalette(brewer.pal(9, 'Spectral'))(max(clusters))
-cols <- sample(cols, length(cols))
-plot(mop)
-plot(points_buffered, col = cols, add = TRUE, border = FALSE)
-plot(centroids_buffered, col = cols, add = TRUE, border = FALSE)
-
-# Go over each point, and see which it falls into
-wheres <- over(census_spatial, centroids_buffered, returnList = TRUE)
-
-# How many are in only one polygon
-only_one <- unlist(lapply(wheres, function(x){
-  length(x) == 1
-}))
-
-# Subset to only keep those that are in only area
-census_spatial_keep <- census_spatial[only_one,]
-sub_wheres <- unlist(wheres[only_one])
-cols_points <- cols[sub_wheres]
-
-plot(mop)
-# Add points with no zone
-plot(centroids_buffered, col = adjustcolor(cols, alpha.f = 0.3), add = TRUE, border = FALSE)
-points(census_spatial_keep, col = adjustcolor(cols_points, alpha.f = 0.8), pch = '.',
-       cex = 0.3)
+selections <- c(15, 26, 50, 75)
+for (i in selections){
+  this_row <- b_df[i,]
+  
+  assign(paste0('g', i),
+    ggmap(get_googlemap(center = c(lon = this_row$x_min,
+                               lat = this_row$y_min),
+                    zoom = 19,
+                    maptype = 'satellite'),
+          extent = 'device') +
+  geom_point(data = census,
+              aes(x = x, 
+                  y = y),
+             alpha = 0.4,
+             color = 'darkred') +
+  theme(axis.line = element_line(color = NA)) + 
+    xlab("") + ylab(""))
+}
+multiplot(get(paste0('g', selections[1])),
+          get(paste0('g', selections[2])),
+          get(paste0('g', selections[3])),
+          get(paste0('g', selections[4])),
+          cols = 2)
 
 
 ```
 
+# Cluster creation
 
-## Using K-means
+The second geospatial issue that we must resolve is the creation of approximately 86 clusters for random assignation to "spray" / "no-spray" groups. These clusters have no size restrictions, but must contain a buffer of at least 1 kilometer, and buffers may not overlap (effectively making the buffer size 2 kilometers).
 
-One simple algorithmic approach for the creation of clusters is K-means. It is xxx. However, the problem is that parameters have more to do with proximity, and less to do with boundaries and buffers.
+
+Our algorithmic approach for the creation of clusters is the k-means method, which creates k (86) clusters in a way so that the sum of squares of the distance from the points to the centroid of each cluster is minimized. Using this method, we assign all `r nrow(census_spatial)` locations to a cluster. 
 
 ```{r}
 # CLUSTER CREATION
@@ -185,6 +207,31 @@ One simple algorithmic approach for the creation of clusters is K-means. It is x
 # Create a matrix of the coordinates of census
 locations_matrix <- as.matrix(census[,c('lng', 'lat')])
   
+# Run kmeans
+n_clusters <- 86
+x <- kmeans(locations_matrix, centers = n_clusters)
+clusters <- x
+
+# Get centroids into spatial
+centroids <- clusters$centers
+centroids <- data.frame(centroids)
+coordinates(centroids) <- ~lng+lat
+proj4string(centroids) <- CRS(original_proj4string)
+centroids <- spTransform(centroids, CRS("+init=epsg:3347"))
+
+# Use the clusters to assign colors
+colors_palette <- colorRampPalette(brewer.pal(9, 'Set1'))(n_clusters)
+colors <- colors_palette[x$cluster]
+colors <- adjustcolor(colors, alpha.f = 0.8)
+
+# plot(mop, col = 'lightgrey', border = NA)
+# points(census_spatial, col = colors, pch = '.', cex = 0.3)
+
+```
+
+However, simple k-means is not sufficient, given the issue of the buffer. Importantly, once buffers are established, many locations must be flagged for removal (because they fall into the cluster+buffer zone of multiple clusters). In some cases, an entire cluster must be removed (since it falls into another cluster's area). Therefore, we have to first build more than 86 clusters in order to end up with 86 after the buffering.
+
+```{r}
 # Run kmeans
 n_clusters <- 200
 x <- kmeans(locations_matrix, centers = n_clusters)
@@ -201,12 +248,12 @@ centroids <- spTransform(centroids, CRS("+init=epsg:3347"))
 colors_palette <- colorRampPalette(brewer.pal(9, 'Set1'))(n_clusters)
 colors <- colors_palette[x$cluster]
 colors <- adjustcolor(colors, alpha.f = 0.8)
-
-plot(mop, col = 'lightgrey', border = NA)
-points(census_spatial, col = colors, pch = '.', cex = 3)
-# points(x$centers,
-#      pch = 3)
+# 
+# plot(mop, col = 'lightgrey', border = NA)
+# points(census_spatial, col = colors, pch = '.', cex = 0.3)
 ```
+
+Having now built 200 clusters, we can proceed to draw buffers. We do this iteratively, starting with the largest cluster. For each cluster, once a buffer is drawn, any locations that are not members of that cluster (but fall within that cluster's buffer zone) are removed.
 
 ```{r}
 # Iterative k means
@@ -233,14 +280,9 @@ cs$keep <- TRUE
 cs$row_number <- 1:nrow(cs)
 
 # Cluster around points by cluster
+buffer_list <- list()
 for (i in 1:nrow(cluster_df)){
-  
-  # If this is the first one, create a the_polygons
-  # object to which we'll add
-  if(i == 1){
-    the_polygons <- points_buffered
-  } 
-  
+
   # Get points and buffer for this cluster
   this_cluster <- cluster_df$cluster[i]
   these_points <- cs[cs$cluster == i,]
@@ -248,13 +290,23 @@ for (i in 1:nrow(cluster_df)){
           width = 1000)
   proj4string(points_buffered) <- proj4string(cs)
   
-  # Check to see if the new points are in the buffer of another polygon
+  # Assign to a list of buffers
+  buffer_list[[i]] <- points_buffered
+  
+    # If this is the first one, create a the_polygons
+  # object to which we'll add
+  if(i == 1){
+    the_polygons <- points_buffered
+    remove <- c()
+  } else {
+      # Check to see if the new points are in the buffer of another polygon
   in_another <-
     over(these_points, the_polygons, returnList = TRUE)
   in_another <- unlist(lapply(in_another, function(x){length(x) >= 1}))
   
   # Get which row numbers are in another polygon
   remove <- these_points$row_number[in_another]
+  }
   
   # Flag in cs
   if(length(remove) > 0){
@@ -262,31 +314,36 @@ for (i in 1:nrow(cluster_df)){
   }
   
   # Combine this polygon with the previous polygons
-  the_polygons <- gUnion(the_polygons, points_buffered)
+  if(i > 1){
+      the_polygons <- gUnion(the_polygons, points_buffered)
+  }
   
   # Message
-  message(paste0('Just finished cluster number ', i))
+  # message(paste0('Just finished cluster number ', i))
 }
 
 # Get only keepers
 keepers <- cs[cs$keep,]
 
-# Plot it
-plot(mop)
+# # Plot it
+# plot(mop)
 cols <- colors_palette[cs$cluster]
-
-# Plot the polygons
-for (i in 1:nrow(cluster_df)){
-  try({
-      this_cluster <- cluster_df$cluster[i]
-  these_points <- keepers[keepers$cluster == i,]
-  points_buffered <- gBuffer(SpatialPoints(these_points), 
-          width = 1000)
-  proj4string(points_buffered) <- proj4string(cs)
-  plot(points_buffered, col = adjustcolor(cols[i], alpha.f = 0.3), add = TRUE)
-  points(these_points, col = cols[i], pch = '.', cex = 0.1)
-  })
-}
+# 
+# # Plot the polygons
+# for (i in 1:nrow(cluster_df)){
+# try({
+#     this_cluster <- cluster_df$cluster[i]
+#     these_points <- keepers[keepers$cluster == i,]
+#     minimal <- gBuffer(SpatialPoints(these_points),
+#                        width = 1)
+#     points_buffered <- gBuffer(SpatialPoints(these_points), 
+#             width = 1000)
+#     proj4string(points_buffered) <- proj4string(cs)
+#     plot(minimal, col = adjustcolor(cols[i], alpha.f = 0.3), add = TRUE)
+#     plot(points_buffered, col = adjustcolor(cols[i], alpha.f = 0.3), add = TRUE)
+#     points(these_points, col = cols[i], pch = 16, cex = 0.1)
+#   })
+# }
 
 
 # Get counts again
@@ -297,294 +354,114 @@ new_counts <-
   tally
 ```
 
+Our clusters (prior to removing those locations within buffer zones) look like this. Note that many clusters have virtually no buffer at all, and houses from different clusters are nearly touching one another in some areas:
+
 ```{r}
+cs_df <- data.frame(cs)
+leaflet(mop_ll) %>%
+  addProviderTiles("Stamen.Watercolor") %>%
+  addCircleMarkers(lng = cs_df$lng,
+  lat = cs_df$lat,
+  color = cols,
+  fillColor = cols,
+  radius = 2.5,
+  opacity = 0,
+  fillOpacity = 0.5,
+  popup = paste0('Cluster: ', cs_df$cluster, ' ', cs_df$META_INSTANCE_NAME, '\nvillage: ',
+  cs_df$LOCAL_VILLAGE_NAME))
+```
 
-# Cluster around all points
-# 
-clusters_buffered <- gBuffer(SpatialPoints(census_spatial),
-             id = clusters$cluster,
-             byid = TRUE,
-             width = 1000)
-proj4string(clusters_buffered) <- proj4string(census_spatial)
+We define buffers of 1 kilomter. After defining the buffers (and removing the necessary locations which fell into buffer zones), they look like this:
 
+```{r}
+cs_df <- data.frame(cs) 
+new_cols <- cols[cs_df$keep]
+cs_df <- cs_df %>% filter(keep)
+leaflet() %>%
+  addProviderTiles("Stamen.Watercolor") %>%
+  addCircleMarkers(lng = cs_df$lng,
+  lat = cs_df$lat,
+  color = new_cols,
+  fillColor = new_cols,
+  radius = 2.5,
+  opacity = 0,
+  fillOpacity = 0.5,
+  popup = paste0('Cluster: ', cs_df$cluster, ' ', cs_df$META_INSTANCE_NAME, '\nvillage: ',
+  cs_df$LOCAL_VILLAGE_NAME)) 
+```
 
-cols <- colorRampPalette(brewer.pal(9, 'Spectral'))(max(clusters$cluster))
-cols <- sample(cols, length(cols))
-plot(mop)
-plot(clusters_buffered, col = cols, add = TRUE, border = FALSE)
+Finally, having designated our clusters, we randomly assign them to "spray" / "no-spray" status (blue = "spray", red = "no-spray").
 
-# Go over each point, and see which it falls into
-# wheres <- over(census_spatial, clusters_buffered, returnList = TRUE)
-wheres <- over(census_spatial, clusters_buffered)
+```{r}
+cluster_df$spray <- sample(c('spray', 'no spray'), nrow(cluster_df), replace = TRUE)
+cs@data <- 
+  left_join(cs@data,
+            cluster_df %>%
+              dplyr::select(-n),
+            by = 'cluster')
+cs_df <- data.frame(cs) %>% filter(keep)
+cs_df$color <-
+  ifelse(cs_df$spray == 'spray', 'blue', 'darkred')
 
-cols_points <- cols[wheres]
-
-plot(mop)
-# Add points with no zone
-points(census_spatial[is.na(wheres),], col = 'grey', pch = '.')
-plot(clusters_buffered, col = adjustcolor(cols, alpha.f = 0.3), add = TRUE, border = FALSE)
-
-points(census_spatial, col = adjustcolor(cols_points, alpha.f = 0.8), pch = '.')
-
-# 
-# # Create buffers around clusters (very slow)
-# for (i in 1:max(clusters$cluster)){
-#   message(paste0('Cluster ', i))
-#   assign(paste0('cluster', i),
-#          gBuffer(census_spatial[clusters$cluster == i,],
-#                  width = 1000))
-#     # Also get minimal cluster (ie, no buffer)
-#   assign(paste0('minimal_cluster', i),
-#          gBuffer(census_spatial[clusters$cluster == i,],
-#                  width = 0.000001))
-# }
-# 
-# plot(mop)
-# cols <- colorRampPalette(brewer.pal(9, 'Spectral'))(max(clusters$cluster))
-# cols <- sample(cols, length(cols))
-# for (i in 1:max(clusters$cluster)){
-#   obj <- get(paste0('cluster', i))
-#   plot(obj, col = cols[i], add = TRUE, border = FALSE)
-# }
-# 
-# # See which points are within the buffer zones of multiple polygons
-# in_buffer <-
-#   function(point){
-#     ins <- c()
-#     for (i in 1:n_clusters){
-#       ins[i] <- over(point, get(paste0('cluster', i)))
-#     }
-#     return(length(which(!is.na(ins))))
-#   }
-# 
-# # Really slow!
-# census_spatial$zones <- FALSE
-# for (i in 1:nrow(census_spatial)){
-#   message(i)
-#   census_spatial$zones[i] <-
-#     in_buffer(census_spatial[i,])
-# }
-# hist(census_spatial$zones)
+leaflet(mop_ll) %>%
+  addProviderTiles("Stamen.Watercolor") %>%
+  addCircleMarkers(lng = cs_df$lng,
+  lat = cs_df$lat,
+  color = cs_df$color,
+  fillColor = cs_df$color,
+  radius = 2.5,
+  opacity = 0,
+  fillOpacity = 0.5,
+  popup = paste0('Cluster: ', cs_df$cluster, ' ', cs_df$META_INSTANCE_NAME, '\nvillage: ',
+  cs_df$LOCAL_VILLAGE_NAME))
 
 ```
 
-```{r}
-# ALTERNATIVE ! Just use the centroids of each cluster
-# get the 1 km cluster, 
-# and exclude all points not in it
-# Create buffers around clusters (very slow)
-
-centroids_buffered <- gBuffer(centroids, byid = TRUE, width = 2000)
-
-cols <- colorRampPalette(brewer.pal(9, 'Spectral'))(max(clusters$cluster))
-cols <- sample(cols, length(cols))
-plot(mop)
-plot(centroids_buffered, col = cols, add = TRUE, border = FALSE)
-
-# Go over each point, and see which it falls into
-wheres <- over(census_spatial, centroids_buffered, returnList = TRUE)
-
-# How many are in only one polygon
-only_one <- unlist(lapply(wheres, function(x){
-  length(x) == 1
-}))
-
-# Subset to only keep those that are in only area
-census_spatial_keep <- census_spatial[only_one,]
-wheres <- unlist(wheres[only_one])
-cols_points <- cols[wheres]
-
-plot(mop)
-# Add points with no zone
-plot(centroids_buffered, col = adjustcolor(cols, alpha.f = 0.3), add = TRUE, border = FALSE)
-points(census_spatial_keep, col = adjustcolor(cols_points, alpha.f = 0.8), pch = '.')
-
-
-# for (i in 1:max(clusters$cluster)){
-#   message(paste0('Cluster ', i))
-#   assign(paste0('cluster', i),
-#          gBuffer(centroids[i,],
-#                  width = 1))
-#   # Also get minimal cluster (ie, no buffer)
-#   assign(paste0('minimal_cluster', i),
-#          gBuffer(centroids[i,],
-#                  width = 0.000001))
-#   
-# }
-# plot(mop)
-# cols <- colorRampPalette(brewer.pal(9, 'Spectral'))(max(clusters$cluster))
-# cols <- sample(cols, length(cols))
-# 
-# for (i in 1:max(clusters$cluster)){
-#   obj <- get(paste0('minimal_cluster', i))
-#   plot(obj, col = cols[i], add = TRUE, border = FALSE)
-#   obj <- get(paste0('cluster', i))
-#   plot(obj, col = adjustcolor(cols[i], alpha.f = 0.3), add = TRUE, border = FALSE)
-# }
-# 
-# # Combine
-# 
-# clusters_combined <- gUnion(cluster1, cluster2)
-# for (i in 3:n_clusters){
-#   message(i)
-#   clusters_combined <- gUnion(clusters_combined,
-#                               get(paste0('cluster', i)))
-# }
-# x <- gUnion(x, cluster8)
-# 
-# y <- rgeos::gIntersection(x, cluster8)
-
-# Visualize
-
-
-
-# See which points are within the buffer zones of multiple polygons
-in_buffer <-
-  function(point){
-    ins <- c()
-    for (i in 1:n_clusters){
-      ins[i] <- over(point, get(paste0('cluster', i)))
-    }
-    return(length(which(!is.na(ins))))
-  }
-# Really slow!
-census_spatial$zones <- FALSE
-for (i in 1:nrow(census_spatial)){
-  message(i)
-  census_spatial$zones[i] <-
-    in_buffer(census_spatial[i,])
-}
-
-```
-
-## K-means modified
-
-We first built clusters using k-means, and then iteratively "trim" those clsuters until buffers are of suitable size.
-
-## Custom approach
-
-Since we're less concerned about number of clusters and proximity to cluster centers, and more concerned about distance _between_ clusters, we instead employ an approach in which clusters are formed sequentially (starting at the most isolated point), and each cluster's formation ends as soon as no points are within two kilometers.
-
-Since over-continuity is an issue, we first remove all points that have fewer than 20 other locations within two kilometers.
+For field workers' use, they will be provided with both satellite and road maps at the time of spraying (see below).
 
 ```{r}
-# Get a matrix of distances between all points
-all_distances <-
-  spDists(census_spatial)
-
-# Set to NA the self-distance
-for (i in 1:nrow(all_distances)){
-  all_distances[i,i] <- NA
-}
-
-# Get a vector of minimum distances
-minimum_distances <-
-  apply(all_distances, 1, min, na.rm = TRUE)
-```
-
-```{r}
-####################################
-# Create clusters
-buffer_size <- 1 # in kilometers
-the_data <- census_spatial
-the_data$done <- FALSE
-the_data$cluster_number <- NA
-the_data$row_number <- 1:nrow(the_data)
-cluster_number <- 1
-
-while(length(which(the_data$done)) < length(the_data$done)){
-  
-  # Get a new start index
-   possibles <- data.frame(the_data) %>% filter(!done)
-   possible_minimum_distances <- minimum_distances[!the_data$done]
-   start_index <- possibles$row_number[which.min(possible_minimum_distances)]
-   if(the_data$done[start_index]){
-     stop('Fix your start indexer')
-   }
-    
-  # Get the start point
-  start_point <- the_data[start_index,]
-  
-  # Mark the start point as in the cluster
-  the_data$cluster_number[start_index] <- cluster_number
-  the_data$done[start_index] <- TRUE
-  
-  # Get the nearest points that are within the buffer size
-  close_indices <- which(all_distances[start_index,] <= buffer_size)
-  
-  if(length(close_indices) > 0){
-    # For those that are close (and not yet part of another cluster)
-    # assign to current cluster
-    the_data$cluster_number[close_indices] <-
-      ifelse(is.na(the_data$cluster_number[close_indices]), cluster_number,
-             the_data$cluster_number[close_indices])
-      the_data$done[close_indices] <- TRUE  
-  }
-  
-  # Message
-   message(paste0('Finished creating cluster ', cluster_number, '\n(',
-                  length(close_indices) + 1, ' points assigned).\n',
-                  length(which(!the_data$done)), ' points remaining.'))
-
-    # Get a new cluster number
-    cluster_number <- cluster_number + 1
-}
-
-```
-
-
-```{r}
-# Plot
-cols <- rainbow(max(the_data$cluster_number))
-plot(mop)
-points(the_data, col = cols)
-```
-
-
-# Visualizations
-
-
-Here are all locations collected so far, overalid onto Esri's "World Imagery" satellite layer. Zoom in and out, move around, and click on any point to see the "META_INSTANCE_NAME" and village name.
-
-```{r}
-# Plot an interactive map
-leaflet(zam) %>%
+leaflet(mop_ll) %>%
   addProviderTiles("Esri.WorldImagery") %>%
-  addCircleMarkers(lng = census$lng,
-                   lat = census$lat,
-                   color = colors,
-                   fillColor = 'blue',
-                   radius = 2.5,
-                   opacity = 0,
-                   fillOpacity = 0.5,
-                   popup = paste0(census$META_INSTANCE_NAME, '\nvillage: ',
-                   census$LOCAL_VILLAGE_NAME))
+  addCircleMarkers(lng = cs_df$lng,
+  lat = cs_df$lat,
+  color = cs_df$color,
+  fillColor = cs_df$color,
+  radius = 2.5,
+  opacity = 0,
+  fillOpacity = 0.5,
+  popup = paste0('Cluster: ', cs_df$cluster, ' ', cs_df$META_INSTANCE_NAME, '\nvillage: ',
+  cs_df$LOCAL_VILLAGE_NAME))
+```
+
+```{r}
+leaflet(mop_ll) %>%
+  addProviderTiles("OpenStreetMap.Mapnik") %>%
+  addCircleMarkers(lng = cs_df$lng,
+  lat = cs_df$lat,
+  color = cs_df$color,
+  fillColor = cs_df$color,
+  radius = 2.5,
+  opacity = 0,
+  fillOpacity = 0.5,
+  popup = paste0('Cluster: ', cs_df$cluster, ' ', cs_df$META_INSTANCE_NAME, '\nvillage: ',
+  cs_df$LOCAL_VILLAGE_NAME))
 ```
 
 
+## Issues
+
+### High exclusion rate
+
+With such large buffer zones, a majority of locations have to be excluded in order to meet the number of required clusters. As of now (data collection not finished), `r nrow(census_spatial)` locations have been censed, but only `r length(which(cs$keep))` are able to be assigned a cluster (due to the fact that the rest fall into buffer zones). The number of eligible locations could be increased by either (a) decreasing the buffer or (b) decreasing the number of required clusters.
 
 ```{r}
-# OTHER STRATEGIES
-
-## FPC
-library(fpc)
-lat<-census_spatial$latitude
-lon<-census_spatial$longitude
-
-DBSCAN <- dbscan(cbind(lat, lon), eps = 0.01, MinPts = 3, showplot = TRUE)
-plot(lon, lat, col = DBSCAN$cluster, pch = 20)
-
-## FIELDS
-library(fields)
-threshold.in.km <- 1
-coors <- data.frame(lon,lat)
-
-#distance matrix
-dist <- rdist.earth(coors,miles = F,R=6371)
-
-#clustering
-fit <- hclust(as.dist(dist), method = "single")
-clusters <- cutree(fit,h = threshold.in.km)
-
-plot(lon, lat, col = clusters, pch = 20)
+df <- data.frame(Status = c('After', 'Before'),
+                 Locations = c(nrow(census), length(which(cs$keep))))
+levels(df$Status) <- c('Before', 'After')
+ggplot(data =df,
+       aes(x = Status, y = Locations)) +
+  geom_bar(stat = 'identity', fill = 'orangered', alpha = 0.6) +
+  theme_bw() +
+  ggtitle('Effect of buffering on sample size')
+  
 ```
