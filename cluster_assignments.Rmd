@@ -137,7 +137,16 @@ leaflet(mop_ll) %>%
 
 # Parameters
 
-We must designate approximately 86 clusters for random assignation to "spray" / "no-spray" groups. These clusters have no size restrictions, but must not divide villages, must contain a buffer of at least 1 kilometer, and buffers may not overlap (effectively making the buffer size 2 kilometers).
+We must designate approximately 86 clusters for random assignation to "spray" / "no-spray" groups. These clusters have no size restrictions, but are subject to multiple constraints:
+
+- Assignation must not divide villages (ie, one village must have exactly 1 spray/no-spray status).
+- Each cluster must contain a buffer of at least 1 kilometer.
+- Buffers may not overlap (effectively making the buffer size 2 kilometers).
+- Units near the rim of the distrct should be excluded (for logistical purposes).
+- There must be at least 18 children <5 years of age in each core area (at time of enrollment).
+- Those children should be from different houses, ideally.
+- The 86 clusters must be divided into 3 strata (with similarly sized clusters per strata).
+- Mopeia sede should be excluded completely (?).
 
 Our algorithmic approach for the creation of clusters is the k-means method, which creates k (86) clusters in a way so that the sum of squares of the distance from the points to the centroid of each cluster is minimized. Using this method, we assign all `r nrow(census_spatial)` locations to a cluster. 
 
