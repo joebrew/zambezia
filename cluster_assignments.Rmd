@@ -1,6 +1,6 @@
 ---
-title: Real-time monitoring of Zambezia data collection
-author: Joe Brew, Charfudin Sacoor, Carlos Chaccour, Francisco Saute
+title: Cost-effectiveness evaluation of vector control strategies in Mozambique - cluster assignments
+author: Joe Brew, Charfudin Sacoor, Carlos Chaccour, Molly Robertson, Francisco Saute
 fig_height: 2.6
 fig_width: 4
 output:
@@ -101,22 +101,16 @@ mop <- spTransform(mop, CRS("+init=epsg:3347"))
 
 # Introduction
 
-This document provides a basic overview of two different geospatial issues related to to the Mopeia/Zambezia census and associated assignation of spray/no-spray zones:
+This document serves to explain both the methods and results for the algorithmic creation of buffered clusters for the designation of spray vs. no-spray zones for the "Cost-effectiveness evaluation of vector control strategies in Mozambique" study.
 
-1. The identification of areas not yet censed through the generation of interactive satellite visualizations overlaid with cenus location data.
+This is an internal document meant to provide an overview of methodology/approach. Its results are preliminary.
 
-2. The algorithmic creation of buffered clusters for the designation of spray vs. no-spray zones.
+# Locations  
 
-This is an internal document meant to provide an overview of methodology/approach. Its results are preliminary, and the examples herein are just that: _examples_. 
+`r nrow(census)` locations have been identified by the census in the district of Mopeia. These locations (blue points), along with the border of the district (red), can be visualized below.
 
-# Census data collection validation
+(Note: the map is interactive. Zoom in for a closer look, or click on a blue dot to see the house ID number and village name.)
 
-Data is actively being collected from the Mopeia area of Zambezia. One concern of the data collection is team is the completeness of the data being collected (ie, that all houses are censed). One way to ensure that houses are not being missed is to overlay the locations of censed houses with satellite images, followed by manual inspection of the overlays in order to identify not yet censed structures.
-
-## Interactive (ad-hoc) examination
-
-
-The below map is "interactive" in two ways: (1) it can be zoomed and scrolled so as to explore different areas and (2) locations (blue dots) can be clicked to reveal further information about the structure in question.
 
 ```{r}
 mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
@@ -140,71 +134,52 @@ leaflet(mop_ll) %>%
   census$LOCAL_VILLAGE_NAME))
 ```
 
-The above map is useful for manual _ad-hoc_ inspection. 
 
-## Static (systematic) examination
+# Parameters
 
-However, we can also "grid" our area off and inspect each sector in a more systematic fashion.  What follows are examples of gridded areas for inspection by the data collection team. At this resolution, we would need to check approximately 300,000 gridded maps to ensure complete coverage for Mopeia. Though that number sounds daunting, the time this manual check takes could be rlatively low since (a) a majority of areas are known _a priori_ to have no inhabitants and therefore need no check, and (b) the generation of these maps requires no manual work.
-
-What follows is a (random) sample of 4 of what these static maps look like.
-
-```{r}
-# 1000 x iterations
-# 490 y iterations
-
-# Define the boundary box
-bb <- bbox(mop_ll)
-xs <- as.numeric(bb[1,])
-ys <- as.numeric(bb[2,])
-
-# Define a dataframe of limits
-xl <- seq(min(xs), max(xs), by = 0.1)
-yl <- seq(min(ys), max(ys), by = 0.1)
-b_df <- 
-  expand.grid(x_min = xl, 
-              y_min = yl)#,
-              # x_max = xl,
-              # y_max = yl)
-# b_df <- b_df %>% filter(x_min < x_max,
-#                         y_min < y_max)
-
-selections <- c(15, 26, 50, 75)
-for (i in selections){
-  this_row <- b_df[i,]
-  
-  assign(paste0('g', i),
-    ggmap(get_googlemap(center = c(lon = this_row$x_min,
-                               lat = this_row$y_min),
-                    zoom = 19,
-                    maptype = 'satellite'),
-          extent = 'device') +
-  geom_point(data = census,
-              aes(x = x, 
-                  y = y),
-             alpha = 0.4,
-             color = 'darkred') +
-  theme(axis.line = element_line(color = NA)) + 
-    xlab("") + ylab(""))
-}
-multiplot(get(paste0('g', selections[1])),
-          get(paste0('g', selections[2])),
-          get(paste0('g', selections[3])),
-          get(paste0('g', selections[4])),
-          cols = 2)
-
-
-```
-
-# Cluster creation
-
-The second geospatial issue that we must resolve is the creation of approximately 86 clusters for random assignation to "spray" / "no-spray" groups. These clusters have no size restrictions, but must contain a buffer of at least 1 kilometer, and buffers may not overlap (effectively making the buffer size 2 kilometers).
-
+We must designate approximately 86 clusters for random assignation to "spray" / "no-spray" groups. These clusters have no size restrictions, but must not divide villages, must contain a buffer of at least 1 kilometer, and buffers may not overlap (effectively making the buffer size 2 kilometers).
 
 Our algorithmic approach for the creation of clusters is the k-means method, which creates k (86) clusters in a way so that the sum of squares of the distance from the points to the centroid of each cluster is minimized. Using this method, we assign all `r nrow(census_spatial)` locations to a cluster. 
 
 ```{r}
 # CLUSTER CREATION
 
+# Get only village and location for each datapoint
+locations <- data.frame(census[,c('META_INSTANCE_NAME', 
+                                  'LOCAL_VILLAGE_NAME', 
+                                  'lng', 
+                                  'lat',
+                                  'x',
+                                  'y')]) %>%
+  dplyr::rename(village = LOCAL_VILLAGE_NAME,
+                id = META_INSTANCE_NAME)
+
+# # Create a matrix of the coordinates of census
+# locations_matrix <- as.matrix(census[,c('lng', 'lat')])
+
+# Get border of those points
+coordinates(locations) <- ~x+y
+x <- rgeos::gConvexHull(locations)
+
+# Get border polygons for each location
+polygons_list <- list()
+villages <- sort(unique(locations$village))
+for (i in 1:length(villages)){
+  this_village = villages[i]
+  message(paste0('Working on ', this_village, '.'))
+  sub_locations <- locations[locations$village == this_village,]
+  x <- rgeos::gConvexHull(sub_locations)
+  plot(x, add = T, col = adjustcolor(sample(rainbow(1000), 1), alpha.f = 0.3),
+       border = adjustcolor('black', alpha.f = 0.4), lwd = 0.2)
+}
+
+# Group by village
+x <- locations %>%
+  group_by(village) %>%
+  summarise(houses = n()) %>%
+  arrange(desc(village))
+
+# OLD WAY---------------------
 # Create a matrix of the coordinates of census
 locations_matrix <- as.matrix(census[,c('lng', 'lat')])
   
