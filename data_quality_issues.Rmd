@@ -113,11 +113,15 @@ The datasets being used are `CENSUS_MOPEIA_CORE` and `CENSUS_MOPEIA_CHILDREN_INF
 
 ## Terminology  
 
-The term "village" refers to the the `LOCAL_VILLAGE_NAME` column in the census data. The terms "ID" or "Household ID" refer to the `META_INSTANCE_NAME` column in the census data.
+In previous reports, the term "village" referred to the the `LOCAL_VILLAGE_NAME` column in the census data. However, for simplicity's sake, we are now using village number (which is parsed from the 5th to 8th digits of the `HOUSEHOLD_NUMBER` variable. The terms "ID" or "Household ID" refer to the `META_INSTANCE_NAME` column in the census data.
+
+```{r}
+census$village <- as.numeric(lapply(strsplit(census$HOUSEHOLD_NUMBER, split = '-'), function(x){x[2]}))
+```
 
 ## Locations  
 
-`r nrow(census)` locations have been identified by the census in the district of Mopeia. These locations (blue points), along with the border of the district (red), can be visualized below.
+`r nrow(census)` locations have been identified by the census in the district of Mopeia. These locations (colored by their village), along with the border of the district (red), can be visualized below.
 
 (Note: the map is interactive. Zoom in for a closer look, or click on a blue dot to see the house ID number and village name.)
 
@@ -125,6 +129,13 @@ The term "village" refers to the the `LOCAL_VILLAGE_NAME` column in the census d
 ```{r}
 mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
 proj4string(mop_ll) <- proj4string(zam)
+color_indices <- as.numeric(factor(census$village))
+colors <- colorRampPalette(c(brewer.pal(9, 'Spectral'),
+                             brewer.pal(9, 'Set3'),
+                             brewer.pal(9, 'Set2'),
+                             brewer.pal(9, 'Set1')))(max(color_indices))
+colors <- sample(colors, length(colors))
+cols <- colors[color_indices]
 
 leaflet(mop_ll) %>%
   addProviderTiles("Esri.WorldImagery") %>%
@@ -135,20 +146,20 @@ leaflet(mop_ll) %>%
   #             col = 'red') %>%
   addCircleMarkers(lng = census$lng,
   lat = census$lat,
-  color = colors,
-  fillColor = 'blue',
+  color = cols,
+  fillColor = cols,
   radius = 2.5,
   opacity = 0,
   fillOpacity = 0.5,
-  popup = paste0(census$META_INSTANCE_NAME, '\nvillage: ',
-  census$LOCAL_VILLAGE_NAME))
+  popup = paste0(census$META_INSTANCE_NAME, ' village name: ',
+  census$LOCAL_VILLAGE_NAME, ' village number: ', census$village))
 ```
 
 # Issues
 
 ## Inconsistent village naming/spelling  
 
-In the raw data, there are `r length(unique(census$LOCAL_VILLAGE_NAME))` unique village names. This is far more than there _should_ be. Many of the errors are due to obvious spelling issues; however, in some cases, the `LOCAL_VILLAGE_NAME` is so inaccurate as to be incomprehensible (ie, `04`, `ABRIL`, or `,AGAIO`).
+In the raw data, there are `r length(unique(census$LOCAL_VILLAGE_NAME))` unique village names, bt only `r length(unique(census$village))` village numbers. The former is far more than there _should_ be. Many of the errors are due to obvious spelling issues; however, in some cases, the `LOCAL_VILLAGE_NAME` is so inaccurate as to be incomprehensible (ie, `04`, `ABRIL`, or `,AGAIO`).
 
 The below table shows all village names, along with the number of houses associated with that village.
 
@@ -160,9 +171,20 @@ temp <-
 DT::datatable(temp)
 ```
 
+For this reason, we focus on village number (parsed from `HOUSEHOLD_NUMBER`). The below table shows all village numbers, along with the number of houses associated with that village.
+
+```{r}
+temp <- 
+  census %>%
+  group_by(Village = village) %>%
+  summarise(Houses = n())
+DT::datatable(temp)
+```
+
+
 ## Overlapping village boundaries
 
-In order to properly designate village borders and buffers, it is essential to demarcate which areas fall into which village. By definition, any point can be part of no more than one village. However, with the current raw data,there is a great deal of overlap.
+In order to properly designate village borders and buffers, it is essential to demarcate which areas fall into which village. By definition, any point can be part of no more than one village. We eliminate much of the overlap by using village numbers instead of village names. However, there is stil some overlap.
 
 The below map shows each village's boundaries, as calculated through the Convex Hull of each village's included coordinates. In theory, there should be no overlapping whatsoever.
 
@@ -171,13 +193,12 @@ The below map shows each village's boundaries, as calculated through the Convex 
 
 # Get only village and location for each datapoint
 locations <- data.frame(census[,c('META_INSTANCE_NAME', 
-                                  'LOCAL_VILLAGE_NAME', 
+                                  'village', 
                                   'lng', 
                                   'lat',
                                   'x',
                                   'y')]) %>%
-  dplyr::rename(village = LOCAL_VILLAGE_NAME,
-                id = META_INSTANCE_NAME)
+  dplyr::rename(id = META_INSTANCE_NAME)
 
 # # Create a matrix of the coordinates of census
 # locations_matrix <- as.matrix(census[,c('lng', 'lat')])
@@ -195,11 +216,18 @@ plot(mop_map)
 # Get border polygons for each location
 polygons_list <- list()
 villages <- sort(unique(locations$village))
+areas <- rep(NA, length(villages))
+houses <- rep(NA, length(villages))
 for (i in 1:length(villages)){
   this_village = villages[i]
   message(paste0('Working on ', this_village, '.'))
   sub_locations <- locations[locations$village == this_village,]
+  houses[i] <- nrow(sub_locations)
   x <- rgeos::gConvexHull(sub_locations)
+  # Project it
+  y <- spTransform(x, 
+                   CRS( "+init=epsg:3347" ))
+  areas[i] <- rgeos::gArea(y)
   plot(x, add = T, col = adjustcolor(sample(rainbow(1000), 1), alpha.f = 0.15),
        border = adjustcolor('black', alpha.f = 0.4), lwd = 0.2)
 }
@@ -231,4 +259,37 @@ temp_df <- temp@data
 temp_df <- temp_df[1:100,]
 names(temp_df) <- Hmisc::capitalize(gsub('_', ' ', names(temp_df)))
 DT::datatable(temp_df)
+```
+
+It may also be helpful to identify the overly large villages (ie, those with incorrect inclusions), by comparing their area. The below table shows the area of each village (in UTM degrees) order by largest.
+
+```{r}
+village_df <- data.frame(village = villages,
+                         area = areas,
+                         houses = houses)
+village_df <- village_df %>% 
+  arrange(desc(area))
+names(village_df) <- Hmisc::capitalize(names(village_df))
+DT::datatable(village_df)
+```
+
+What follows is a plot of each village's area, within the confines of Mopeia. These maps go in order from the "largest" village (per the raw data) to the smallest. The points show the individual houses.
+
+These maps can be used to diagnose and correct errors. Below each map is a table containing all of the houses that are part of that neighborhood.
+
+```{r}
+for (i in 1:nrow(village_df)){
+  this_village = village_df$Village[i]
+  this_color <- adjustcolor(sample(rainbow(1000), 1))
+  plot(mop_map, main = paste0('Neighborhood number: ', this_village))
+  message(paste0('Working on ', this_village, '.'))
+  sub_locations <- locations[locations$village == this_village,]
+  points(sub_locations,
+         col = adjustcolor(this_color, alpha.f = 0.6),
+         pch = ".")
+  x <- rgeos::gConvexHull(sub_locations)
+  plot(x, add = T, col = adjustcolor(this_color, alpha.f = 0.1),
+       border = adjustcolor('black', alpha.f = 0.4), lwd = 0.2)
+  sub_locations
+}
 ```
