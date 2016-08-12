@@ -11,8 +11,8 @@
 
 get_zambezia <- function(credentials_yaml = 'credentials.yaml',
                          on_site = FALSE,
-                         get_fresh = TRUE,
-                         save = TRUE){
+                         get_fresh = FALSE,
+                         save = FALSE){
   
   #Libraries
   require(RMySQL)
@@ -68,10 +68,10 @@ get_zambezia <- function(credentials_yaml = 'credentials.yaml',
         stop(paste0('No saved data in snapshots. Set get_fresh to TRUE.'))
       } else {
         message(paste0('Reading in data which was retrieved on ',
-                       dates))
+                       max(dates)))
       }
       read_these <- which(dates == max(dates))
-      for (r in 1:length(read_these)){
+      for (r in read_these){
         load(paste0('snapshots/', snapshots[r]),
              envir = .GlobalEnv)
       }
