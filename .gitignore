@@ -1,3 +1,5 @@
 /credentials
 *.RData
 credentials.yaml
+/snapshots
+/redcap
