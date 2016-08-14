@@ -22,6 +22,13 @@ library(ggplot2)
 library(rgeos)
 library(RColorBrewer)
 library(Rmisc)
+# Libraries
+library(rgdal)
+library(raster)
+library(sp)
+library(leaflet)
+library(ggmap)
+library(readxl)
 
 # Basic knitr options
 opts_chunk$set(comment = NA, 
@@ -43,25 +50,22 @@ knit_engines$set(asis = function(options) {
 
 ```{r}
 #### READ IN AND CLEAN UP DATA
-# Libraries
-library(rgdal)
-library(raster)
-library(sp)
-library(leaflet)
-library(ggmap)
 
 # Source script
 source('lib/get_zambezia.R')
 
-# Read in zambezia data
-get_zambezia(get_fresh = FALSE, save = FALSE)
+# # Read in zambezia data from odk database
+# get_zambezia(get_fresh = FALSE, save = FALSE)
+# # Get a more nicely named core census file
+# census <- CENSUS_MOPEIA_CORE
 
-# Get a more nicely named core census file
-census <- CENSUS_MOPEIA_CORE
+# Read in final spreadsheet, as provided by Orvalho
+census <- read_excel('dropbox/final_joe_dataset.xlsx')
+census <- data.frame(census)
 
 # Get more nicely named geographic coordinate column names
-census$lat <- census$y <- census$latitude <- census$GPC_LAT
-census$lon <- census$lng <- census$longitude <-census$x <- census$GPC_LNG
+census$lat <- census$y <- census$latitude <- census$gpc_lat
+census$lon <- census$lng <- census$longitude <-census$x <- census$gpc_lng
 
 # Get a shapefile for Mozambique
 moz <- raster::getData('GADM', country = 'MOZ', level = 3)
@@ -121,6 +125,13 @@ The below map is "interactive" in two ways: (1) it can be zoomed and scrolled so
 ```{r}
 mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
 proj4string(mop_ll) <- proj4string(zam)
+color_indices <- as.numeric(factor(census$village))
+colors <- colorRampPalette(c(brewer.pal(9, 'Spectral'),
+                             brewer.pal(9, 'Set3'),
+                             brewer.pal(9, 'Set2'),
+                             brewer.pal(9, 'Set1')))(max(color_indices))
+colors <- sample(colors, length(colors))
+cols <- colors[color_indices]
 
 leaflet(mop_ll) %>%
   addProviderTiles("Esri.WorldImagery") %>%
@@ -131,13 +142,13 @@ leaflet(mop_ll) %>%
   #             col = 'red') %>%
   addCircleMarkers(lng = census$lng,
   lat = census$lat,
-  color = colors,
-  fillColor = 'blue',
+  color = cols,
+  fillColor = cols,
   radius = 2.5,
   opacity = 0,
   fillOpacity = 0.5,
-  popup = paste0(census$META_INSTANCE_NAME, '\nvillage: ',
-  census$LOCAL_VILLAGE_NAME))
+  popup = paste0(census$META_INSTANCE_NAME, ' village name: ',
+  census$LOCAL_VILLAGE_NAME, ' village number: ', census$village))
 ```
 
 The above map is useful for manual _ad-hoc_ inspection. 

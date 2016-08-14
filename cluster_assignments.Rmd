@@ -9,7 +9,6 @@ output:
     toc_float: true
     theme: yeti
 ---
-
 ```{r, echo = FALSE, warning = FALSE, message = FALSE, comment = NA, error= FALSE, cache = FALSE}
 # No scientific notation
 options(scipen=999)
@@ -22,6 +21,14 @@ library(ggplot2)
 library(rgeos)
 library(RColorBrewer)
 library(Rmisc)
+# Libraries
+library(rgdal)
+library(raster)
+library(sp)
+library(leaflet)
+library(ggmap)
+library(readxl)
+library(dplyr)
 
 # Basic knitr options
 opts_chunk$set(comment = NA, 
@@ -43,29 +50,30 @@ knit_engines$set(asis = function(options) {
 
 ```{r}
 #### READ IN AND CLEAN UP DATA
-# Libraries
-library(rgdal)
-library(raster)
-library(sp)
-library(leaflet)
-library(ggmap)
 
 # Source script
 source('lib/get_zambezia.R')
 
-# Read in zambezia data
-get_zambezia(get_fresh = FALSE, save = FALSE)
+# # Read in zambezia data from odk database
+# get_zambezia(get_fresh = FALSE, save = FALSE)
+# # Get a more nicely named core census file
+# census <- CENSUS_MOPEIA_CORE
 
-# Get a more nicely named core census file
-census <- CENSUS_MOPEIA_CORE
+# Read in final spreadsheet, as provided by Orvalho
+census <- read_excel('dropbox/final_joe_dataset.xlsx')
+census <- data.frame(census)
 
 # Get more nicely named geographic coordinate column names
-census$lat <- census$y <- census$latitude <- census$GPC_LAT
-census$lon <- census$lng <- census$longitude <-census$x <- census$GPC_LNG
+census$lat <- census$y <- census$latitude <- census$gpc_lat
+census$lon <- census$lng <- census$longitude <-census$x <- census$gpc_lng
 
 # Get a shapefile for Mozambique
 moz <- raster::getData('GADM', country = 'MOZ', level = 3)
 moz2 <- raster::getData('GADM', country = 'MOZ', level = 2)
+
+# Get a village number
+census$village_number <- 
+  as.numeric(lapply(strsplit(census$household_number, split = '-'), function(x){x[2]}))
 
 # Create a spatial version of census
 census_spatial <- census
@@ -96,7 +104,17 @@ mop_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
 census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
 mop <- spTransform(mop, CRS("+init=epsg:3347"))
 # Later, we can switch back to lat/long:
-# census_spatial <- spTransform(census_spatial, CRS("+init=epsg:4326"))
+census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
+mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
+# proj4string(mop_ll) <- proj4string(zam)
+
+# Get the most prevalent village name for each village number
+census_villages <-
+  census %>%
+  dplyr::group_by(village_number, village) %>% 
+  tally %>%
+  group_by(village_number) %>%
+  summarise(correct_village_name = village[which(n == max(n))][1])
 ```
 
 # Introduction
@@ -113,9 +131,6 @@ This is an internal document meant to provide an overview of methodology/approac
 
 
 ```{r}
-mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
-proj4string(mop_ll) <- proj4string(zam)
-
 leaflet(mop_ll) %>%
   addProviderTiles("Esri.WorldImagery") %>%
   addPolylines(color = 'red') %>%
@@ -130,8 +145,8 @@ leaflet(mop_ll) %>%
   radius = 2.5,
   opacity = 0,
   fillOpacity = 0.5,
-  popup = paste0(census$META_INSTANCE_NAME, '\nvillage: ',
-  census$LOCAL_VILLAGE_NAME))
+  popup = paste0('Household: ', census$household_number, ' Village number: ',
+  census$village_number))
 ```
 
 
@@ -146,307 +161,370 @@ We must designate approximately 86 clusters for random assignation to "spray" / 
 - There must be at least 18 children <5 years of age in each core area (at time of enrollment).
 - Those children should be from different houses, ideally.
 - The 86 clusters must be divided into 3 strata (with similarly sized clusters per strata).
-- Mopeia sede should be excluded completely (?).
 
-Our algorithmic approach for the creation of clusters is the k-means method, which creates k (86) clusters in a way so that the sum of squares of the distance from the points to the centroid of each cluster is minimized. Using this method, we assign all `r nrow(census_spatial)` locations to a cluster. 
+
+# Incorrectly classified households  
+
+## Identifying errors
+
+It appears that many households are not assigned the right village number, given their geographic location. To detect these, we take the distance from each household to all the other households in its village; in the case that the median distance from the household to all the other households exceeds 20,000 UTM degrees, it is considered "suspected" to be incorrect. 
+
+The below table shows all 191 villages. The `n_incorrect_houses` column indicates the number of households in each village which are suspected to _not_ be part of that village.
+
 
 ```{r}
-# CLUSTER CREATION
+# Get the area and other metrics for each village
+unique_village_numbers <- sort(unique(census$village_number))
+village_df <- census %>%
+  group_by(village_number) %>%
+  summarise(n_children = sum(number_of_children),
+            houses_with_any_children = length(which(number_of_children > 0)),
+            houses = n(),
+            area = NA,
+            incorrect_houses = NA,
+            n_incorrect_houses = NA)
 
-# Get only village and location for each datapoint
-locations <- data.frame(census[,c('META_INSTANCE_NAME', 
-                                  'LOCAL_VILLAGE_NAME', 
-                                  'lng', 
-                                  'lat',
-                                  'x',
-                                  'y')]) %>%
-  dplyr::rename(village = LOCAL_VILLAGE_NAME,
-                id = META_INSTANCE_NAME)
+# Create placeholder vector of incorrect houses
+incorrect_houses <- c()
+  
+color <- 'darkgreen'
+for (i in 1:nrow(village_df)){
+  message(i)
+  # Get village name
+  this_village <- village_df$village_number[i]
+    # Get the points only
+  sub_census <- 
+    census_spatial[census_spatial$village_number == this_village,]
+  # Get the border
+  border <- gConvexHull(sub_census)
+  # Calculate area
+  this_area <- gArea(border)
+  # Populate area in dataframe
+  village_df$area[i] <- this_area
+  
+  # Go through each household in the unit and calculate distance
+  # to all other units
+  distances <- gDistance(sub_census, byid = TRUE)
+  median_distances <- apply(distances, 1, median)
 
-# # Create a matrix of the coordinates of census
-# locations_matrix <- as.matrix(census[,c('lng', 'lat')])
-
-# Get border of those points
-coordinates(locations) <- ~x+y
-x <- rgeos::gConvexHull(locations)
-
-# Get border polygons for each location
-polygons_list <- list()
-villages <- sort(unique(locations$village))
-for (i in 1:length(villages)){
-  this_village = villages[i]
-  message(paste0('Working on ', this_village, '.'))
-  sub_locations <- locations[locations$village == this_village,]
-  x <- rgeos::gConvexHull(sub_locations)
-  plot(x, add = T, col = adjustcolor(sample(rainbow(1000), 1), alpha.f = 0.3),
-       border = adjustcolor('black', alpha.f = 0.4), lwd = 0.2)
+  # From the vector of median distances, flag those which are abnormal
+  threshold <- 20000
+  incorrect_house_ids <- sub_census$household_number[median_distances > threshold]
+  # Stick results into dataframe
+  village_df$n_incorrect_houses[i] <- length(incorrect_house_ids)
+  village_df$incorrect_houses[i] <- paste0(incorrect_house_ids, collapse = ', ')
+  
+  # Add to the vector of incorrect houses 
+  incorrect_houses <- c(incorrect_houses, incorrect_house_ids)
 }
 
-# Group by village
-x <- locations %>%
-  group_by(village) %>%
-  summarise(houses = n()) %>%
-  arrange(desc(village))
+# Reorder the village dataframe by size
+village_df <- 
+  village_df %>%
+  arrange(desc(houses))
 
-# OLD WAY---------------------
-# Create a matrix of the coordinates of census
-locations_matrix <- as.matrix(census[,c('lng', 'lat')])
-  
-# Run kmeans
-n_clusters <- 86
-x <- kmeans(locations_matrix, centers = n_clusters)
-clusters <- x
+# Print table
+x <- village_df %>%
+  dplyr::select(-incorrect_houses)
+DT::datatable(x)
+```
 
-# Get centroids into spatial
-centroids <- clusters$centers
-centroids <- data.frame(centroids)
-coordinates(centroids) <- ~lng+lat
-proj4string(centroids) <- CRS(original_proj4string)
-centroids <- spTransform(centroids, CRS("+init=epsg:3347"))
+All in all, `r length(incorrect_houses)` houses are suspected to be incorrectly classified (ie, either their geographic coordinates are incorrect, or their household ID number is incorrect). These are those IDs:
 
-# Use the clusters to assign colors
-colors_palette <- colorRampPalette(brewer.pal(9, 'Set1'))(n_clusters)
-colors <- colors_palette[x$cluster]
-colors <- adjustcolor(colors, alpha.f = 0.8)
+```{r}
+incorrect_houses_df <- data.frame(household_number = incorrect_houses)
+incorrect_houses_df <-
+  incorrect_houses_df %>%
+  left_join(census %>%
+              dplyr::select(household_number, village_number)) %>%
+  arrange(village_number) %>%
+  dplyr::select(village_number, household_number)
+DT::datatable(incorrect_houses_df)
+```
 
-# plot(mop, col = 'lightgrey', border = NA)
-# points(census_spatial, col = colors, pch = '.', cex = 0.3)
+All in all, `r length(which(village_df$incorrect_houses > 0))` of `r nrow(village_df)` villages appear to have incorrect household inclusions. The below maps show each of these `r length(which(village_df$incorrect_houses > 0))` villages. Note the abnormal (and large) polygon shapes, due to the incorrect inclusions.
+
+```{r}
+incorrect_villages <- village_df[which(village_df$incorrect_houses > 0),]
+for(i in 1:nrow(incorrect_villages)){
+  this_village_number <- incorrect_villages$village_number[i]
+   # Get the points only
+  sub_census <- census_spatial_ll[census_spatial_ll$village_number == this_village_number,]
+  # Plot Mopeia
+  plot(mop_ll)
+  # Get the border
+  border <- gConvexHull(sub_census)
+  # Plot the border
+  plot(border, add = TRUE, col = adjustcolor(color, alpha.f = 0.3),
+       border = adjustcolor(color, alpha.f = 0.8))
+  # Add the points
+  points(sub_census,
+         pch = '.',
+         col = adjustcolor(color, alpha.f = 0.6))
+  # Add title
+  title(main = paste0('Village number: ', unique_village_numbers[i]))
+}
+```
+
+## Addressing errors
+
+In order to address errors, we simply remove the `r length(incorrect_houses)` houses we suspect to be incorrectly classified.  
+
+```{r}
+census <- census %>%
+  filter(!household_number %in% incorrect_houses)
+
+# Create a spatial version of census
+census_spatial <- census
+coordinates(census_spatial) <- ~x+y
+proj4string(census_spatial) <- proj4string(moz)
+# Switch to a projected format
+# Project
+census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
+# Later, we can switch back to lat/long:
+census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
 
 ```
 
-However, simple k-means is not sufficient, given the issue of the buffer. Importantly, once buffers are established, many locations must be flagged for removal (because they fall into the cluster+buffer zone of multiple clusters). In some cases, an entire cluster must be removed (since it falls into another cluster's area). Therefore, we have to first build more than 86 clusters in order to end up with 86 after the buffering.
+
+## Combining into clusters
+
+This leaves `r nrow(census)` households from a total of `r length(unique(census$village_number))` villages. 
+
+Having cleaned our data, we now want to combine any villages which are _too_ small (ie, have fewer than 18 children). 
+
+There are `r length(which(village_df$n_children < 18))` of these. In order to account for them, we simply add them to the most nearby village which _does_ have enough children.
 
 ```{r}
-# Run kmeans
-n_clusters <- 200
-x <- kmeans(locations_matrix, centers = n_clusters)
-clusters <- x
+# Get centroids
+village_df <-
+  village_df %>%
+  left_join(census %>%
+  group_by(village_number) %>%
+  summarise(x_centroid = mean(lng),
+            y_centroid = mean(lat)))
 
-# Get centroids into spatial
-centroids <- clusters$centers
-centroids <- data.frame(centroids)
-coordinates(centroids) <- ~lng+lat
-proj4string(centroids) <- CRS(original_proj4string)
-centroids <- spTransform(centroids, CRS("+init=epsg:3347"))
+# Get distances between villages
+distances <- spDists(x = as.matrix(village_df %>% dplyr::select(x_centroid, y_centroid)),
+        longlat = TRUE,
+        diagonal = FALSE)
 
-# Use the clusters to assign colors
-colors_palette <- colorRampPalette(brewer.pal(9, 'Set1'))(n_clusters)
-colors <- colors_palette[x$cluster]
-colors <- adjustcolor(colors, alpha.f = 0.8)
-# 
-# plot(mop, col = 'lightgrey', border = NA)
-# points(census_spatial, col = colors, pch = '.', cex = 0.3)
-```
-
-Having now built 200 clusters, we can proceed to draw buffers. We do this iteratively, starting with the largest cluster. For each cluster, once a buffer is drawn, any locations that are not members of that cluster (but fall within that cluster's buffer zone) are removed.
-
-```{r}
-# Iterative k means
-
-# Create a dataframe of cluster numbers and number of homes associated
-cluster_df <- data.frame(census_spatial)
-cluster_df$cluster <- clusters$cluster
-cluster_df <- cluster_df %>%
-  group_by(cluster) %>%
-  tally %>%
-  ungroup %>%
-  arrange(desc(n))
-
-# Create a copy of census_spatial to modify
-cs <- census_spatial
-
-# Add a column for cluster
-cs$cluster <- clusters$cluster
-
-# Add a column (to be populated below) for whether it gets kept or not
-cs$keep <- TRUE
-
-# Create a row number (we'll use for indexing)
-cs$row_number <- 1:nrow(cs)
-
-# Cluster around points by cluster
-buffer_list <- list()
-for (i in 1:nrow(cluster_df)){
-
-  # Get points and buffer for this cluster
-  this_cluster <- cluster_df$cluster[i]
-  these_points <- cs[cs$cluster == i,]
-  points_buffered <- gBuffer(SpatialPoints(these_points), 
-          width = 1000)
-  proj4string(points_buffered) <- proj4string(cs)
-  
-  # Assign to a list of buffers
-  buffer_list[[i]] <- points_buffered
-  
-    # If this is the first one, create a the_polygons
-  # object to which we'll add
-  if(i == 1){
-    the_polygons <- points_buffered
-    remove <- c()
-  } else {
-      # Check to see if the new points are in the buffer of another polygon
-  in_another <-
-    over(these_points, the_polygons, returnList = TRUE)
-  in_another <- unlist(lapply(in_another, function(x){length(x) >= 1}))
-  
-  # Get which row numbers are in another polygon
-  remove <- these_points$row_number[in_another]
+# Assign preliminary clusters
+counter <- 0
+village_df$cluster <- NA
+for (i in 1:nrow(village_df)){
+  if(village_df$n_children[i] >= 18){
+    counter <- counter + 1
+    village_df$cluster[i] <- counter
   }
-  
-  # Flag in cs
-  if(length(remove) > 0){
-      cs$keep[remove] <- FALSE
-  }
-  
-  # Combine this polygon with the previous polygons
-  if(i > 1){
-      the_polygons <- gUnion(the_polygons, points_buffered)
-  }
-  
-  # Message
-  # message(paste0('Just finished cluster number ', i))
 }
 
-# Get only keepers
-keepers <- cs[cs$keep,]
+# Go through each row, and if not enough children, re-assign to nearby one with enough children
+enough_children <- village_df$n_children >= 18
+for (i in 1:nrow(village_df)){
+  # If not enough children
+  if(is.na(village_df$cluster[i])){
+    # Get the nearest village which isn't too small
+    possibles <- data.frame(cluster = village_df$cluster,
+                            distance = distances[i,])
+    possibles <- possibles %>%
+      filter(!is.na(cluster))
+    this_cluster <- possibles$cluster[which.min(possibles$distance)]
+    village_df$cluster[i] <- this_cluster
+  }
+}
 
-# # Plot it
-# plot(mop)
-cols <- colors_palette[cs$cluster]
-# 
-# # Plot the polygons
-# for (i in 1:nrow(cluster_df)){
-# try({
-#     this_cluster <- cluster_df$cluster[i]
-#     these_points <- keepers[keepers$cluster == i,]
-#     minimal <- gBuffer(SpatialPoints(these_points),
-#                        width = 1)
-#     points_buffered <- gBuffer(SpatialPoints(these_points), 
-#             width = 1000)
-#     proj4string(points_buffered) <- proj4string(cs)
-#     plot(minimal, col = adjustcolor(cols[i], alpha.f = 0.3), add = TRUE)
-#     plot(points_buffered, col = adjustcolor(cols[i], alpha.f = 0.3), add = TRUE)
-#     points(these_points, col = cols[i], pch = 16, cex = 0.1)
-#   })
-# }
+# Bring cluster type into census
+census <- census %>% 
+  left_join(village_df %>%
+              dplyr::select(village_number, cluster),
+            by = 'village_number')
+# Create a spatial version of census
+census_spatial <- census
+coordinates(census_spatial) <- ~x+y
+proj4string(census_spatial) <- proj4string(moz)
+# Switch to a projected format
+# Project
+census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
+# Later, we can switch back to lat/long:
+census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
+```
 
+This leaves us with `r length(unique(village_df$cluster))` clusters.  These clusters can be visualized below.
 
-# Get counts again
-new_counts <-
-  data.frame(cs) %>%
-  filter(keep) %>%
+```{r}
+plot(mop_ll)
+
+possible_colors <- rainbow(1000)
+clusters <- unique(sort(village_df$cluster))
+for (i in 1:length(clusters)){
+  this_cluster <- clusters[i]
+  these_villages <- village_df$village_number[village_df$cluster == this_cluster]
+  these_houses <- census_spatial_ll[census_spatial_ll$village_number %in% these_villages,]
+  # Get Convex hull
+  border <- gConvexHull(these_houses)
+  # Get a random color
+  the_color <- sample(possible_colors, 1)
+  plot(border, add = T,
+       col = adjustcolor(the_color, alpha.f = 0.1),
+       border = adjustcolor(the_color, alpha.f = 0.5))
+  points(these_houses, pch = '.',
+         col = adjustcolor(the_color, alpha.f = 0.8))
+}
+```
+
+# Cluster assignation
+
+The breakdown of cluster assignations can be viewed below.
+
+```{r}
+x <- village_df %>%
   group_by(cluster) %>%
-  tally
+  summarise(village_numbers = paste0(village_number, collapse = ', '))
+DT::datatable(x)
 ```
 
-Our clusters (prior to removing those locations within buffer zones) look like this. Note that many clusters have virtually no buffer at all, and houses from different clusters are nearly touching one another in some areas:
+# Strata assignation  
+
+We now want to divide our clusters into three kinds: small, medium, and large. For this, we use simple terciles to bin the number of houses per cluster.
 
 ```{r}
-cs_df <- data.frame(cs)
-leaflet(mop_ll) %>%
-  addProviderTiles("Stamen.Watercolor") %>%
-  addCircleMarkers(lng = cs_df$lng,
-  lat = cs_df$lat,
-  color = cols,
-  fillColor = cols,
-  radius = 2.5,
-  opacity = 0,
-  fillOpacity = 0.5,
-  popup = paste0('Cluster: ', cs_df$cluster, ' ', cs_df$META_INSTANCE_NAME, '\nvillage: ',
-  cs_df$LOCAL_VILLAGE_NAME))
+cluster_df <- census %>%
+  group_by(cluster) %>%
+  summarise(n_children = sum(number_of_children),
+            houses_with_any_children = length(which(number_of_children > 0)),
+            houses = n())
+
+# Bin the houses
+the_breaks <- quantile(cluster_df$houses, probs = c(0, 0.33, 0.66, 1))
+bins <- cut(cluster_df$houses, 
+            breaks = the_breaks,
+            include.lowest = TRUE,
+            labels = c('Small', 'Medium', 'Large'))
+cluster_df$strata <- bins
 ```
 
-We define buffers of 1 kilomter. After defining the buffers (and removing the necessary locations which fell into buffer zones), they look like this:
+The strata category cut-offs are 0-`r round(as.numeric(the_breaks[2]))` (small), `r as.numeric(the_breaks[2])`-`r as.numeric(the_breaks[3])` (medium) and `r as.numeric(the_breaks[2])` or more (large). These cut-offs can be visualized in the below histogram.
 
 ```{r}
-cs_df <- data.frame(cs) 
-new_cols <- cols[cs_df$keep]
-cs_df <- cs_df %>% filter(keep)
-leaflet() %>%
-  addProviderTiles("Stamen.Watercolor") %>%
-  addCircleMarkers(lng = cs_df$lng,
-  lat = cs_df$lat,
-  color = new_cols,
-  fillColor = new_cols,
-  radius = 2.5,
-  opacity = 0,
-  fillOpacity = 0.5,
-  popup = paste0('Cluster: ', cs_df$cluster, ' ', cs_df$META_INSTANCE_NAME, '\nvillage: ',
-  cs_df$LOCAL_VILLAGE_NAME)) 
+hist(cluster_df$houses,
+     breaks = 100,
+     main = 'Distribution of number of households per cluster',
+     border = NA,
+     col = 'grey',
+     xlab = 'Houses')
+abline(v = as.numeric(the_breaks[2:3]),
+       col = adjustcolor('darkred', alpha.f = 0.6))
 ```
 
-Finally, having designated our clusters, we randomly assign them to "spray" / "no-spray" status (blue = "spray", red = "no-spray").
+The strata for each village is viewable in the below table
 
 ```{r}
-cluster_df$spray <- sample(c('spray', 'no spray'), nrow(cluster_df), replace = TRUE)
-cs@data <- 
-  left_join(cs@data,
-            cluster_df %>%
-              dplyr::select(-n),
+DT::datatable(cluster_df)
+```
+
+# Spray / no-spray assignation
+
+From the `r nrow(cluster_df)` clusters, we randomly assign all to spray or no-spray status, using our size strata so that an equal number of small, medium, and large clusters get each status. The assignation is as follows.
+
+```{r}
+set.seed(1000)
+results_list <- list()
+stratas <- c('Small', 'Medium', 'Large')
+for (i in 1:length(stratas)){
+  this_strata <- cluster_df %>% 
+    filter(strata == stratas[i])
+  # Get exactly half to certain status
+  n_assign <- round(0.5 * nrow(this_strata))
+  # Randomly get n_assign rows
+  these_ones <- sample(1:nrow(this_strata), n_assign)
+  this_strata$status <- 'No spray'
+  this_strata$status[these_ones] <- 'Spray'
+  results_list[[i]] <- this_strata
+}
+cluster_df <- do.call('rbind', results_list)
+```
+
+The below table shows the spray / no-spray status _by cluster_.
+
+```{r}
+x <- cluster_df
+DT::datatable(x)
+```
+
+The below table shows the spray / no-spray status _by village_.
+
+```{r}
+x <- 
+  census %>%
+  group_by(village_number) %>%
+  summarise(houses = n(),
+            cluster = first(cluster)) %>%
+  left_join(cluster_df %>%
+              dplyr::select(cluster, status))
+DT::datatable(x)
+# Write a csv
+readr::write_csv(x, '~/Desktop/spray_no_spray_assignments.csv')
+```
+
+The spray / no-spray statuses can be visualized in the below maps. Blue is no spray; red is spray.
+
+```{r}
+# Bring the statuses into census
+census <- census %>% 
+  left_join(cluster_df %>%
+              dplyr::select(cluster, status, strata),
             by = 'cluster')
-cs_df <- data.frame(cs) %>% filter(keep)
-cs_df$color <-
-  ifelse(cs_df$spray == 'spray', 'blue', 'darkred')
+# Create a spatial version of census
+census_spatial <- census
+coordinates(census_spatial) <- ~x+y
+proj4string(census_spatial) <- proj4string(moz)
+# Switch to a projected format
+# Project
+census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
+# Later, we can switch back to lat/long:
+census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
 
-leaflet(mop_ll) %>%
-  addProviderTiles("Stamen.Watercolor") %>%
-  addCircleMarkers(lng = cs_df$lng,
-  lat = cs_df$lat,
-  color = cs_df$color,
-  fillColor = cs_df$color,
-  radius = 2.5,
-  opacity = 0,
-  fillOpacity = 0.5,
-  popup = paste0('Cluster: ', cs_df$cluster, ' ', cs_df$META_INSTANCE_NAME, '\nvillage: ',
-  cs_df$LOCAL_VILLAGE_NAME))
+# # PLOT IT
+# plot(mop_ll)
+# cols <- ifelse(census$status == 'Spray', 'darkgreen', 'darkred')
+# points(census_spatial_ll,
+#        col = cols,
+#        pch = '.')
 
-```
+# Divide into spray / no-spray
+spray <- census %>% filter(status == 'Spray')
+no_spray <- census %>% filter(status == 'No spray')
 
-For field workers' use, they will be provided with both satellite and road maps at the time of spraying (see below).
-
-```{r}
-leaflet(mop_ll) %>%
+leaflet() %>%
   addProviderTiles("Esri.WorldImagery") %>%
-  addCircleMarkers(lng = cs_df$lng,
-  lat = cs_df$lat,
-  color = cs_df$color,
-  fillColor = cs_df$color,
+  addPolylines(data = mop_ll, color = 'black') %>%
+  addCircleMarkers(lng = spray$lng,
+  lat = spray$lat,
+  color = colors,
+  fillColor = 'red',
   radius = 2.5,
   opacity = 0,
   fillOpacity = 0.5,
-  popup = paste0('Cluster: ', cs_df$cluster, ' ', cs_df$META_INSTANCE_NAME, '\nvillage: ',
-  cs_df$LOCAL_VILLAGE_NAME))
-```
-
-```{r}
-leaflet(mop_ll) %>%
-  addProviderTiles("OpenStreetMap.Mapnik") %>%
-  addCircleMarkers(lng = cs_df$lng,
-  lat = cs_df$lat,
-  color = cs_df$color,
-  fillColor = cs_df$color,
+  popup = paste0('Household: ', spray$household_number, ' Village number: ',
+  spray$village_number, ' Cluster number: ', spray$cluster)) %>%
+  
+  addCircleMarkers(lng = no_spray$lng,
+  lat = no_spray$lat,
+  color = colors,
+  fillColor = 'blue',
   radius = 2.5,
   opacity = 0,
   fillOpacity = 0.5,
-  popup = paste0('Cluster: ', cs_df$cluster, ' ', cs_df$META_INSTANCE_NAME, '\nvillage: ',
-  cs_df$LOCAL_VILLAGE_NAME))
-```
-
-
-## Issues
-
-### High exclusion rate
-
-With such large buffer zones, a majority of locations have to be excluded in order to meet the number of required clusters. As of now (data collection not finished), `r nrow(census_spatial)` locations have been censed, but only `r length(which(cs$keep))` are able to be assigned a cluster (due to the fact that the rest fall into buffer zones). The number of eligible locations could be increased by either (a) decreasing the buffer or (b) decreasing the number of required clusters.
-
-```{r}
-df <- data.frame(Status = c('After', 'Before'),
-                 Locations = c(nrow(census), length(which(cs$keep))))
-levels(df$Status) <- c('Before', 'After')
-ggplot(data =df,
-       aes(x = Status, y = Locations)) +
-  geom_bar(stat = 'identity', fill = 'orangered', alpha = 0.6) +
-  theme_bw() +
-  ggtitle('Effect of buffering on sample size')
+popup = paste0('Household: ', no_spray$household_number, ' Village number: ',
+  no_spray$village_number, ' Cluster number: ', no_spray$cluster)) 
   
 ```
+
+
+# Caveats
+
+1. This approach uses some "automated" data cleaning. It has not been validated.
+
+2. This approach yields `r (length(unique(sort(x$cluster))))` clusters, which is far more than the required. The assumption herein is that some manual "elimination" of clusters will allow for the satisfication of some operational parameters (ie, avoiding Renamo-occupied villages, villages that are difficult to reach, etc.). 
+
