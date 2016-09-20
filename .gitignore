@@ -3,3 +3,4 @@
 credentials.yaml
 /snapshots
 /redcap
+*.html
