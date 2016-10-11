@@ -1,6 +1,6 @@
 ---
-title: Cost-effectiveness evaluation of vector control strategies in Mozambique - cluster assignments
-author: Joe Brew, Charfudin Sacoor, Carlos Chaccour, Molly Robertson, Francisco Saute
+title: Operational helper document
+author: CISM
 fig_height: 2.6
 fig_width: 4
 output:
@@ -60,7 +60,13 @@ source('lib/get_zambezia.R')
 # census <- CENSUS_MOPEIA_CORE
 
 # Read in final spreadsheet, as provided by Orvalho
-census <- read_excel('dropbox/final_joe_dataset.xlsx')
+# census <- read_excel('dropbox/final_joe_dataset.xlsx')
+
+# Read in final redcap dataset, as instructed by Charfudin 11 October 2016
+census <- readr::read_csv(file = 'redcap/CensusMopeia_DATA_2016-10-11_1541.csv')
+# Keep only relevant observations
+census <- census %>% filter(redcap_event_name == 'census_mopeia_core_arm_1')
+census <- data.frame(census)
 
 # Get more nicely named geographic coordinate column names
 census$lat <- census$y <- census$latitude <- census$gpc_lat
@@ -72,7 +78,7 @@ moz2 <- raster::getData('GADM', country = 'MOZ', level = 2)
 
 # Get a village number
 census$village_number <- 
-  as.numeric(lapply(strsplit(census$household_number, split = '-'), function(x){x[2]}))
+  as.numeric(lapply(strsplit(census$houseno_rev, split = '-'), function(x){x[2]}))
 
 # Create a spatial version of census
 census_spatial <- census
@@ -118,57 +124,7 @@ census_villages <-
 
 # Introduction
 
-This document serves to explain both the methods and results for the algorithmic creation of buffered clusters for the designation of spray vs. no-spray zones for the "Cost-effectiveness evaluation of vector control strategies in Mozambique" study.
-
-This is an internal document meant to provide an overview of methodology/approach. Its results are preliminary.
-
-# Locations  
-
-`r nrow(census)` locations have been identified by the census in the district of Mopeia. These locations (blue points), along with the border of the district (red), can be visualized below.
-
-(Note: the map is interactive. Zoom in for a closer look, or click on a blue dot to see the house ID number and village name.)
-
-
-```{r}
-leaflet(mop_ll) %>%
-  addProviderTiles("Esri.WorldImagery") %>%
-  addPolylines(color = 'red') %>%
-  # addPolygons(stroke = FALSE, 
-  #             smoothFactor = 0.2, 
-  #             fillOpacity = 0.25,
-  #             col = 'red') %>%
-  addCircleMarkers(lng = census$lng,
-  lat = census$lat,
-  color = colors,
-  fillColor = 'blue',
-  radius = 2.5,
-  opacity = 0,
-  fillOpacity = 0.5,
-  popup = paste0('Household: ', census$household_number, ' Village number: ',
-  census$village_number))
-```
-
-
-# Parameters
-
-We must designate approximately 86 clusters for random assignation to "spray" / "no-spray" groups. These clusters have no size restrictions, but are subject to multiple constraints:
-
-- Assignation must not divide villages (ie, one village must have exactly 1 spray/no-spray status).
-- Each cluster must contain a buffer of at least 1 kilometer.
-- Buffers may not overlap (effectively making the buffer size 2 kilometers).
-- Units near the rim of the distrct should be excluded (for logistical purposes).
-- There must be at least 18 children <5 years of age in each core area (at time of enrollment).
-- Those children should be from different houses, ideally.
-- The 86 clusters must be divided into 3 strata (with similarly sized clusters per strata).
-
-
-# Incorrectly classified households  
-
-## Identifying errors
-
-It appears that many households are not assigned the right village number, given their geographic location. To detect these, we take the distance from each household to all the other households in its village; in the case that the median distance from the household to all the other households exceeds 20,000 UTM degrees, it is considered "suspected" to be incorrect. 
-
-The below table shows all 191 villages. The `n_incorrect_houses` column indicates the number of households in each village which are suspected to _not_ be part of that village.
+This document contains maps and tables pertaining to the households and bairros assigned to "spray" and "no-spray" status. Data cleaning has not been finished, so the content of this document should be considered preliminary.
 
 
 ```{r}
@@ -193,13 +149,16 @@ for (i in 1:nrow(village_df)){
   this_village <- village_df$village_number[i]
     # Get the points only
   sub_census <- 
-    census_spatial[census_spatial$village_number == this_village,]
+    census_spatial[which(census_spatial$village_number == this_village),]
   # Get the border
   border <- gConvexHull(sub_census)
   # Calculate area
-  this_area <- gArea(border)
-  # Populate area in dataframe
-  village_df$area[i] <- this_area
+  if(!is.null(border)){
+    this_area <- gArea(border)
+    # Populate area in dataframe
+    village_df$area[i] <- this_area
+  }
+  
   
   # Go through each household in the unit and calculate distance
   # to all other units
@@ -208,7 +167,7 @@ for (i in 1:nrow(village_df)){
 
   # From the vector of median distances, flag those which are abnormal
   threshold <- 20000
-  incorrect_house_ids <- sub_census$household_number[median_distances > threshold]
+  incorrect_house_ids <- sub_census$houseno_rev[median_distances > threshold]
   # Stick results into dataframe
   village_df$n_incorrect_houses[i] <- length(incorrect_house_ids)
   village_df$incorrect_houses[i] <- paste0(incorrect_house_ids, collapse = ', ')
@@ -225,30 +184,37 @@ village_df <-
 # Print table
 x <- village_df %>%
   dplyr::select(-incorrect_houses)
-DT::datatable(x)
+# DT::datatable(x)
+
+# MERGE WITH THE CLUSTER ASSIGNMENTS FROM AUGUST
+cluster_assignments <- readr::read_csv('outputs/cluster_assignments.csv')
+village_df <- 
+  village_df %>%
+  left_join(cluster_assignments)
+
 ```
 
-All in all, `r length(incorrect_houses)` houses are suspected to be incorrectly classified (ie, either their geographic coordinates are incorrect, or their household ID number is incorrect). These are those IDs:
+<!-- All in all, `r length(incorrect_houses)` houses are suspected to be incorrectly classified (ie, either their geographic coordinates are incorrect, or their household ID number is incorrect). These are those IDs: -->
 
 ```{r}
-incorrect_houses_df <- data.frame(household_number = incorrect_houses)
+incorrect_houses_df <- data.frame(houseno_rev = incorrect_houses)
 incorrect_houses_df <-
   incorrect_houses_df %>%
   left_join(census %>%
-              dplyr::select(household_number, village_number)) %>%
+              dplyr::select(houseno_rev, village_number)) %>%
   arrange(village_number) %>%
-  dplyr::select(village_number, household_number)
-DT::datatable(incorrect_houses_df)
+  dplyr::select(village_number, houseno_rev)
+# DT::datatable(incorrect_houses_df)
 ```
 
-All in all, `r length(which(village_df$incorrect_houses > 0))` of `r nrow(village_df)` villages appear to have incorrect household inclusions. The below maps show each of these `r length(which(village_df$incorrect_houses > 0))` villages. Note the abnormal (and large) polygon shapes, due to the incorrect inclusions.
+<!-- All in all, `r length(which(village_df$incorrect_houses > 0))` of `r nrow(village_df)` villages appear to have incorrect household inclusions. The below maps show each of these `r length(which(village_df$incorrect_houses > 0))` villages. Note the abnormal (and large) polygon shapes, due to the incorrect inclusions. -->
 
-```{r}
+```{r, eval = FALSE}
 incorrect_villages <- village_df[which(village_df$incorrect_houses > 0),]
 for(i in 1:nrow(incorrect_villages)){
   this_village_number <- incorrect_villages$village_number[i]
    # Get the points only
-  sub_census <- census_spatial_ll[census_spatial_ll$village_number == this_village_number,]
+  sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
   # Plot Mopeia
   plot(mop_ll)
   # Get the border
@@ -265,13 +231,14 @@ for(i in 1:nrow(incorrect_villages)){
 }
 ```
 
-## Addressing errors
+<!-- ## Addressing errors -->
 
-In order to address errors, we simply remove the `r length(incorrect_houses)` houses we suspect to be incorrectly classified.  
+<!-- In order to address errors, we simply remove the `r length(incorrect_houses)` houses we suspect to be incorrectly classified.   -->
 
 ```{r}
-census <- census %>%
-  filter(!household_number %in% incorrect_houses)
+# # NOT FILTERING OUT THOSE INCORRECT HOUSES
+# census <- census %>%
+#   filter(!houseno_rev %in% incorrect_houses)
 
 # Create a spatial version of census
 census_spatial <- census
@@ -282,56 +249,32 @@ proj4string(census_spatial) <- proj4string(moz)
 census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
 # Later, we can switch back to lat/long:
 census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
-
 ```
 
 
-## Combining into clusters
-
-This leaves `r nrow(census)` households from a total of `r length(unique(census$village_number))` villages. 
-
-Having cleaned our data, we now want to combine any villages which are _too_ small (ie, have fewer than 18 children). 
-
-There are `r length(which(village_df$n_children < 18))` of these. In order to account for them, we simply add them to the most nearby village which _does_ have enough children.
-
 ```{r}
+# Remove those observations with no coordinates
+census <- census %>%
+  filter(!is.na(lng), !is.na(lat))
+
 # Get centroids
 village_df <-
   village_df %>%
   left_join(census %>%
-  group_by(village_number) %>%
-  summarise(x_centroid = mean(lng),
-            y_centroid = mean(lat)))
+    group_by(village_number) %>%
+    summarise(x_centroid = mean(lng, na.rm = TRUE),
+              y_centroid = mean(lat, na.rm = TRUE)))
+
+# Remove the villages with no coordinates
+village_df <- 
+  village_df %>%
+  filter(!is.na(x_centroid),
+         !is.na(y_centroid))
 
 # Get distances between villages
 distances <- spDists(x = as.matrix(village_df %>% dplyr::select(x_centroid, y_centroid)),
         longlat = TRUE,
         diagonal = FALSE)
-
-# Assign preliminary clusters
-counter <- 0
-village_df$cluster <- NA
-for (i in 1:nrow(village_df)){
-  if(village_df$n_children[i] >= 18){
-    counter <- counter + 1
-    village_df$cluster[i] <- counter
-  }
-}
-
-# Go through each row, and if not enough children, re-assign to nearby one with enough children
-enough_children <- village_df$n_children >= 18
-for (i in 1:nrow(village_df)){
-  # If not enough children
-  if(is.na(village_df$cluster[i])){
-    # Get the nearest village which isn't too small
-    possibles <- data.frame(cluster = village_df$cluster,
-                            distance = distances[i,])
-    possibles <- possibles %>%
-      filter(!is.na(cluster))
-    this_cluster <- possibles$cluster[which.min(possibles$distance)]
-    village_df$cluster[i] <- this_cluster
-  }
-}
 
 # Bring cluster type into census
 census <- census %>% 
@@ -349,9 +292,9 @@ census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
 census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
 ```
 
-This leaves us with `r length(unique(village_df$cluster))` clusters.  These clusters can be visualized below.
+<!-- This leaves us with `r length(unique(village_df$cluster))` clusters.  These clusters can be visualized below. -->
 
-```{r}
+```{r, eval = FALSE}
 plot(mop_ll)
 
 possible_colors <- rainbow(1000)
@@ -374,52 +317,23 @@ for (i in 1:length(clusters)){
 
 # Cluster assignation
 
-The breakdown of cluster assignations can be viewed below.
+The breakdown of cluster assignments can be viewed below.
 
 ```{r}
 x <- village_df %>%
   group_by(cluster) %>%
   summarise(village_numbers = paste0(village_number, collapse = ', '))
-DT::datatable(x)
-```
 
-# Strata assignation  
-
-We now want to divide our clusters into three kinds: small, medium, and large. For this, we use simple terciles to bin the number of houses per cluster.
-
-```{r}
 cluster_df <- census %>%
   group_by(cluster) %>%
   summarise(n_children = sum(number_of_children),
             houses_with_any_children = length(which(number_of_children > 0)),
             houses = n())
 
-# Bin the houses
-the_breaks <- quantile(cluster_df$houses, probs = c(0, 0.33, 0.66, 1))
-bins <- cut(cluster_df$houses, 
-            breaks = the_breaks,
-            include.lowest = TRUE,
-            labels = c('Small', 'Medium', 'Large'))
-cluster_df$strata <- bins
-```
+x <- x %>%
+  left_join(cluster_df)
+DT::datatable(x)
 
-The strata category cut-offs are 0-`r round(as.numeric(the_breaks[2]))` (small), `r as.numeric(the_breaks[2])`-`r as.numeric(the_breaks[3])` (medium) and `r as.numeric(the_breaks[2])` or more (large). These cut-offs can be visualized in the below histogram.
-
-```{r}
-hist(cluster_df$houses,
-     breaks = 100,
-     main = 'Distribution of number of households per cluster',
-     border = NA,
-     col = 'grey',
-     xlab = 'Houses')
-abline(v = as.numeric(the_breaks[2:3]),
-       col = adjustcolor('darkred', alpha.f = 0.6))
-```
-
-The strata for each village is viewable in the below table
-
-```{r}
-DT::datatable(cluster_df)
 ```
 
 # Spray / no-spray assignation
@@ -428,14 +342,9 @@ The spray / no-spray designations were carried out in person.
 
 
 ```{r}
-# Write the cluster assignments, etc.
-cluster_assignments <- 
-  village_df %>%
-  dplyr::select(village_number, cluster)
-readr::write_csv(cluster_assignments, 'outputs/cluster_assignments.csv')
-
 # Read in the spray / no-spray statuses (emailed to me)
-spray_status <- read_excel('20160817 Mopeia spray-no spray random list.xlsx')
+# spray_status <- read_excel('20160817 Mopeia spray-no spray random list.xlsx')
+spray_status <- read_excel('Final spray no spray list.xlsx')
 
 # Clean up
 spray_status <- spray_status[,1:11]
@@ -457,6 +366,14 @@ spray_status$status <-
                 TRUE,
                 NA))
 
+# Create a clusters dataframe
+cluster_df <- census %>%
+  group_by(cluster) %>%
+  summarise(n_children = sum(number_of_children),
+            houses_with_any_children = length(which(number_of_children > 0)),
+            houses = n())
+
+
 # Join to cluster_df
 cluster_df$status <- NULL
 cluster_df <- 
@@ -471,7 +388,7 @@ The below table shows the spray / no-spray status _by cluster_.
 
 ```{r}
 x <- cluster_df
-DT::datatable(x)
+DT::datatable(x %>% mutate(spray = ifelse(status, 'spray', 'no spray')) %>% dplyr::select(-status))
 ```
 
 The below table shows the spray / no-spray status _by village_.
@@ -484,22 +401,44 @@ x <-
             cluster = first(cluster)) %>%
   left_join(cluster_df %>%
               dplyr::select(cluster, status))
-DT::datatable(x)
+DT::datatable(x %>% mutate(spray = ifelse(status, 'spray', 'no spray')) %>% dplyr::select(-status))
 # Write a csv
-readr::write_csv(x, '~/Desktop/spray_no_spray_assignments.csv')
+# readr::write_csv(x, '~/Desktop/spray_no_spray_assignments.csv')
 ```
 
 
-The spray / no-spray statuses can be visualized in the below maps. Blue is no spray; red is spray.
+# Master table
 
-## Interactive map
+The below table shows each location, with the corresponding village name, head of household name, health facility name, etc.
 
 ```{r}
 # Bring the statuses into census
 census <- census %>% 
   left_join(cluster_df %>%
-              dplyr::select(cluster, status, strata),
+              dplyr::select(cluster, status),
             by = 'cluster')
+
+x <- census %>%
+  mutate(spray = ifelse(status, 'spray', 'no spray')) %>%
+  dplyr::select(cluster,
+                village_number,
+                spray,
+                houseno_rev,
+                head_name,
+                lat,
+                lng,
+                health_facility) %>%
+  arrange(cluster, village_number)
+DT::datatable(x)
+```
+
+The spray / no-spray statuses can be visualized in the below maps. Blue is no spray; red is spray.
+
+# Maps
+
+## Interactive map
+
+```{r}
 # Create a spatial version of census
 census_spatial <- census
 coordinates(census_spatial) <- ~x+y
@@ -531,7 +470,7 @@ leaflet() %>%
   radius = 2.5,
   opacity = 0,
   fillOpacity = 0.5,
-  popup = paste0('Household: ', spray$household_number, ' Village number: ',
+  popup = paste0('Household: ', spray$houseno_rev, ' Village number: ',
   spray$village_number, ' Cluster number: ', spray$cluster)) %>%
   
   addCircleMarkers(lng = no_spray$lng,
@@ -541,7 +480,7 @@ leaflet() %>%
   radius = 2.5,
   opacity = 0,
   fillOpacity = 0.5,
-popup = paste0('Household: ', no_spray$household_number, ' Village number: ',
+popup = paste0('Household: ', no_spray$houseno_rev, ' Village number: ',
   no_spray$village_number, ' Cluster number: ', no_spray$cluster)) 
 ```
 
@@ -551,6 +490,7 @@ popup = paste0('Household: ', no_spray$household_number, ' Village number: ',
 
 x <- census_spatial_ll
 clusters <- cluster_df$cluster
+clusters <- clusters[!is.na(clusters)]
 colors <- ifelse(cluster_df$status, 'red',
                  ifelse(!cluster_df$status, 'blue',
                         ifelse(is.na(cluster_df$status), 'grey',
@@ -583,6 +523,7 @@ colors <- colors
 
 plot(mop_ll)
 for (i in 1:length(clusters)){
+  message(i)
   this_cluster <- clusters[i]
   these_villages <- village_df$village_number[village_df$cluster == this_cluster]
   these_houses <- x[x$village_number %in% these_villages,]
@@ -590,11 +531,13 @@ for (i in 1:length(clusters)){
   border <- gConvexHull(these_houses)
   # Get a random color
   the_colors <- colors[i]
-  plot(border, add = T,
+  if(!is.null(border)){
+    plot(border, add = T,
        col = adjustcolor(the_colors, alpha.f = 0.1),
        border = adjustcolor(the_colors, alpha.f = 0.3))
-  points(these_houses, pch = 1, cex = 0.05,
-         col = adjustcolor(the_colors, alpha.f = 0.6))
+    points(these_houses, pch = 1, cex = 0.05,
+           col = adjustcolor(the_colors, alpha.f = 0.6))
+  }
 }
 legend('bottomleft',
        pch = NA,
@@ -634,7 +577,7 @@ x <- x@data %>%
                 locality,
                 village,
                 local_village_name,
-                household_number,
+                houseno_rev,
                 head_name,
                 health_facility,
                 number_of_houses,
@@ -649,13 +592,9 @@ x <- x@data %>%
                                       'no spray',
                                       NA))) %>%
   dplyr::select(-status)
-readr::write_csv(x, '~/Desktop/table_for_carlos.csv')
+# readr::write_csv(x, '~/Desktop/table_for_carlos.csv')
 
 ```
 
-# Caveats
 
-1. This approach uses some "automated" data cleaning. It has not been validated.
-
-2. This approach yields `r (length(unique(sort(x$cluster))))` clusters, which is far more than the required. The assumption herein is that some manual "elimination" of clusters will allow for the satisfication of some operational parameters (ie, avoiding Renamo-occupied villages, villages that are difficult to reach, etc.). 
 

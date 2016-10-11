@@ -4,3 +4,4 @@ credentials.yaml
 /snapshots
 /redcap
 *.html
+.Rproj.user
