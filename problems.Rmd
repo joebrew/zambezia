@@ -171,7 +171,7 @@ for (i in 1:nrow(village_df)){
   median_distances <- apply(distances, 1, function(x){quantile(x, 0.75, na.rm = TRUE)})
 
   # Keep only the closest 50 percent
-  close_cluster <- sub_census[which(median_distances < median(median_distances, na.rm = TRUE)),]
+  close_cluster <- sub_census[which(median_distances <= median(median_distances, na.rm = TRUE)),]
   
   # Get the centroids of the close cluster
   centroids <- c(mean(close_cluster$lng, na.rm = TRUE), 
@@ -185,6 +185,12 @@ for (i in 1:nrow(village_df)){
   # From the vector of median distances, flag those which are abnormal
   threshold <- 6
   incorrect_house_ids <- sub_census$houseno_rev[which(distances_to_centroid > threshold)]
+  # Also flag as incorrect any 1 household village ^^
+  if(nrow(sub_census) == 1){
+    incorrect_house_ids <- c(incorrect_house_ids, sub_census$houseno_rev)
+  }
+  
+  
   # Stick results into dataframe
   village_df$n_incorrect_houses[i] <- length(incorrect_house_ids)
   village_df$incorrect_houses[i] <- paste0(incorrect_house_ids, collapse = ', ')
@@ -192,15 +198,21 @@ for (i in 1:nrow(village_df)){
   # Add to the vector of incorrect houses 
   incorrect_houses <- c(incorrect_houses, incorrect_house_ids)
   
-  plot(mop_ll)
-  
-  points(sub_census,
-       col = ifelse(sub_census$houseno_rev %in% incorrect_house_ids, 
-                    'red',
-                    'blue'))
-  plot(border, add = T)
-  title(main = village_df$village_number[i])
-  Sys.sleep(1)
+  # file_name <- as.character(i)
+  # while(nchar(file_name) < 3){
+  #   file_name <- paste0(0, file_name)
+  # }
+  # file_name <- paste0('gifs/',file_name, '.png')
+  # png(file_name)
+  # plot(mop_ll)
+  # 
+  # points(sub_census,
+  #      col = ifelse(sub_census$houseno_rev %in% incorrect_house_ids, 
+  #                   'red',
+  #                   'blue'))
+  # plot(border, add = T)
+  # title(main = paste0('Village number ', village_df$village_number[i]))
+  # dev.off()
   
 }
 
@@ -358,6 +370,139 @@ x <- census %>%
   arrange(village_number)
 x$local_village_name <- stringr::str_replace_all(x$local_village_name,"[^[:graph:]]", " ")
 DT::datatable(x)
+
+# Table for Edgar, 13 October 2016
+# Bring problems into spatial
+census_spatial_ll$suspeito <- 
+  ifelse(census_spatial_ll$houseno_rev %in% incorrect_houses,
+                         'Suspeito',
+                         'OK') 
+
+edgar <- census %>%
+  dplyr::select(village_number,
+                houseno_rev,
+                administrative_post,
+                locality,
+                village,
+                local_village_name,
+                dinq) %>%
+  rename(date_survey = dinq)
+edgar$suspeito <- ifelse(edgar$houseno_rev %in% incorrect_houses,
+                         'Suspeito',
+                         'OK') 
+edgar <- edgar %>%
+  arrange(desc(suspeito))
+
+edgar$url <- paste0('www.economicsofmalaria.com/pngs/', edgar$houseno_rev, '.png')
+
+write_csv(edgar, '~/Desktop/table_for_edgar.csv')
+
+# Generate pngs too
+for (i in 1:nrow(edgar)){
+  # This village
+  this_village_number <- edgar$village_number[i]
+  
+  # This villager
+  this_villager <- census_spatial_ll[census_spatial_ll$houseno_rev == edgar$houseno_rev[i],]
+  
+  # Other villagers
+  other_villagers <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]  
+  
+  # Get correct villagers
+  correct_villagers <- other_villagers[which(other_villagers$suspeito == 'OK'),]
+  # Get border
+  border <- gConvexHull(other_villagers)
+  correct_border <- gConvexHull(correct_villagers)
+  
+  
+  file_name <- paste0('/home/joebrew/Documents/joebrew.github.io/pngs/', edgar$houseno_rev[i], '.png')
+  png(file_name, width = 480,
+      height = 960)
+  
+  par(mfrow = c(2,1))
+  plot(mop_ll)  
+  points(other_villagers, pch = '.',
+         col  = ifelse(other_villagers$suspeito == 'OK',
+                       'darkgreen',
+                       'red'))
+  plot(border, col = adjustcolor('red', alpha.f = 0.2), add = TRUE,
+       border = adjustcolor('red', alpha.f = 0.2))
+  if(nrow(correct_villagers)> 0){
+    plot(correct_border, 
+       col = adjustcolor('darkgreen', alpha.f = 0.2), add = TRUE,
+       border = adjustcolor('darkgreen', alpha.f = 0.2))
+  }
+  
+  points(this_villager, col = 'black')
+  points(this_villager, col = 'black', pch = 3)
+  title(main = 'Zoom out')
+    title(sub = paste0('Village number ', this_village_number))
+  
+  legend('topleft',
+         pch = 1,
+         col = c('darkgreen',
+                 'red',
+                 'black'),
+         legend = c('Casas OK',
+                    'Casas suspeitas',
+                    'Esta casa'),
+         pt.cex = 0.8,
+         cex = 0.8,
+         bty = 'n')
+  legend('bottomleft',
+         lty = 1,
+          col = c('darkgreen',
+         'red'),
+ legend = c('Fronteira corregida',
+            'Fronteira original'),
+ cex = 0.8,
+ bty = 'n')
+  
+  plot(other_villagers, pch = '.',
+         col  = ifelse(other_villagers$suspeito == 'OK',
+                       'darkgreen',
+                       'red'))
+  plot(border, col = adjustcolor('red', alpha.f = 0.2), add = TRUE,
+       border = adjustcolor('red', alpha.f = 0.2))
+  if(nrow(correct_villagers) > 0){
+    plot(correct_border, 
+       col = adjustcolor('darkgreen', alpha.f = 0.2), add = TRUE,
+       border = adjustcolor('darkgreen', alpha.f = 0.2))
+  }
+  
+  points(this_villager, col = 'black')
+  points(this_villager, col = 'black', pch = 3)
+  title(main = paste0('House number ', this_villager$houseno_rev),
+        outer = TRUE, line = -1)
+  title (main = 'Zoom in')
+  title(sub = paste0('Village number ', this_village_number))
+  
+  legend('topleft',
+         pch = 1,
+         col = c('darkgreen',
+                 'red',
+                 'black'),
+         legend = c('Casas OK',
+                    'Casas suspeitas',
+                    'Esta casa'),
+         pt.cex = 0.8,
+         cex = 0.8,
+         bty = 'n')
+  legend('bottomleft',
+         lty = 1,
+          col = c('darkgreen',
+         'red'),
+ legend = c('Fronteira corregida',
+            'Fronteira original'),
+ cex = 0.8,
+ bty = 'n')
+  
+  
+  par(mfrow = c(1,1))
+  dev.off()
+  message(i)
+}
+
 ```
 
 <!-- ## Addressing errors -->
@@ -365,7 +510,7 @@ DT::datatable(x)
 <!-- In order to address errors, we simply remove the `r length(incorrect_houses)` houses we suspect to be incorrectly classified.   -->
 
 ```{r, eval = FALSE}
-# # NOT FILTERING OUT THOSE INCORRECT HOUSES
+# FILTERING OUT THOSE INCORRECT HOUSES
 census <- census %>%
   filter(!houseno_rev %in% incorrect_houses)
 
