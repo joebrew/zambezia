@@ -29,6 +29,7 @@ library(leaflet)
 library(ggmap)
 library(readxl)
 library(dplyr)
+library(readr)
 
 # Basic knitr options
 opts_chunk$set(comment = NA, 
@@ -62,11 +63,14 @@ source('lib/get_zambezia.R')
 # Read in final spreadsheet, as provided by Orvalho
 # census <- read_excel('dropbox/final_joe_dataset.xlsx')
 
-# Read in final redcap dataset, as instructed by Charfudin 11 October 2016
-census <- readr::read_csv(file = 'redcap/CensusMopeia_DATA_2016-10-11_1541.csv')
-# Keep only relevant observations
-census <- census %>% filter(redcap_event_name == 'census_mopeia_core_arm_1')
-census <- data.frame(census)
+# # Read in final redcap dataset, as instructed by Charfudin 11 October 2016
+# census <- readr::read_csv(file = 'redcap/CensusMopeia_DATA_2016-10-11_1541.csv')
+# # Keep only relevant observations
+# census <- census %>% filter(redcap_event_name == 'census_mopeia_core_arm_1')
+# census <- data.frame(census)
+
+# Read in final dataset, as given by Orvahlo on October 12, 2016
+census <- read_excel('dropbox/20161012/household.xlsx')
 
 # Get more nicely named geographic coordinate column names
 census$lat <- census$y <- census$latitude <- census$gpc_lat
@@ -122,9 +126,6 @@ census_villages <-
   summarise(correct_village_name = village[which(n == max(n))][1])
 ```
 
-# Introduction
-
-This document contains maps and tables pertaining to the households and bairros assigned to "spray" and "no-spray" status. Data cleaning has not been finished, so the content of this document should be considered preliminary.
 
 
 ```{r}
@@ -209,7 +210,11 @@ incorrect_houses_df <-
 
 <!-- All in all, `r length(which(village_df$incorrect_houses > 0))` of `r nrow(village_df)` villages appear to have incorrect household inclusions. The below maps show each of these `r length(which(village_df$incorrect_houses > 0))` villages. Note the abnormal (and large) polygon shapes, due to the incorrect inclusions. -->
 
-```{r, eval = FALSE}
+# Villages
+
+The below maps show each village, as well as the "convex hull" (ie, boundaries) of that village's area.
+
+```{r, eval = TRUE}
 incorrect_villages <- village_df[which(village_df$incorrect_houses > 0),]
 for(i in 1:nrow(incorrect_villages)){
   this_village_number <- incorrect_villages$village_number[i]
@@ -237,8 +242,8 @@ for(i in 1:nrow(incorrect_villages)){
 
 ```{r}
 # # NOT FILTERING OUT THOSE INCORRECT HOUSES
-# census <- census %>%
-#   filter(!houseno_rev %in% incorrect_houses)
+census <- census %>%
+  filter(!houseno_rev %in% incorrect_houses)
 
 # Create a spatial version of census
 census_spatial <- census
@@ -292,17 +297,20 @@ census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
 census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
 ```
 
-<!-- This leaves us with `r length(unique(village_df$cluster))` clusters.  These clusters can be visualized below. -->
+# Clusters
 
-```{r, eval = FALSE}
-plot(mop_ll)
+In total, there are `r length(unique(village_df$cluster))` clusters.  Because there have been many changes in the "cleaning" process (ie, certain locations have apparently changed their village designations, etc.), the original clusters in some case overlap and are abnormally large. These clusters can be visualized below.
 
+```{r, eval = TRUE}
 possible_colors <- rainbow(1000)
+plot(mop_ll)
+title(main = 'All clusters')
+
 clusters <- unique(sort(village_df$cluster))
 for (i in 1:length(clusters)){
   this_cluster <- clusters[i]
   these_villages <- village_df$village_number[which(village_df$cluster == this_cluster)]
-  these_houses <- census_spatial_ll[census_spatial_ll$village_number %in% these_villages,]
+  these_houses <- census_spatial_ll[which(census_spatial_ll$village_number %in% these_villages),]
   # Get Convex hull
   border <- gConvexHull(these_houses)
   # Get a random color
@@ -312,10 +320,51 @@ for (i in 1:length(clusters)){
        border = adjustcolor(the_color, alpha.f = 0.5))
   points(these_houses, pch = '.',
          col = adjustcolor(the_color, alpha.f = 0.8))
+  message(this_cluster)
 }
 ```
 
-# Cluster assignation
+To help identify problematic clusters, each cluster's map is printed below.
+
+```{r, eval = TRUE}
+possible_colors <- rainbow(1000)
+clusters <- unique(sort(village_df$cluster))
+for (i in 1:length(clusters)){
+  this_cluster <- clusters[i]
+  plot(mop_ll)
+  title(main = paste0('Cluster number: ', this_cluster))
+  these_villages <- village_df$village_number[which(village_df$cluster == this_cluster)]
+  title(sub = paste0('Includes villages :', paste0(these_villages, collapse = ', ')))
+  these_houses <- census_spatial_ll[which(census_spatial_ll$village_number %in% these_villages),]
+  # Get Convex hull
+  border <- gConvexHull(these_houses)
+  # Get a random color
+  the_color <- sample(possible_colors, 1)
+  plot(border, add = T,
+       col = adjustcolor(the_color, alpha.f = 0.1),
+       border = adjustcolor(the_color, alpha.f = 0.5))
+  points(these_houses, pch = '.',
+         col = adjustcolor(the_color, alpha.f = 0.8))
+  message(this_cluster)
+}
+```
+
+# Village table
+
+The breakdown of villages can be viewed below.
+
+```{r}
+DT::datatable(village_df %>%
+                dplyr::select(village_number,
+                              cluster,
+                              x_centroid,
+                              y_centroid,
+                              houses,
+                              n_children))
+```
+
+
+# Cluster table
 
 The breakdown of cluster assignments can be viewed below.
 
@@ -336,7 +385,7 @@ DT::datatable(x)
 
 ```
 
-# Spray / no-spray assignation
+# Spray / no-spray table
 
 The spray / no-spray designations were carried out in person. 
 
@@ -388,7 +437,8 @@ The below table shows the spray / no-spray status _by cluster_.
 
 ```{r}
 x <- cluster_df
-DT::datatable(x %>% mutate(spray = ifelse(status, 'spray', 'no spray')) %>% dplyr::select(-status))
+DT::datatable(x %>% mutate(spray = ifelse(status, 'spray', 'no spray')) %>% dplyr::select(cluster,
+                                                                                          spray))
 ```
 
 The below table shows the spray / no-spray status _by village_.
@@ -432,11 +482,11 @@ x <- census %>%
 DT::datatable(x)
 ```
 
-The spray / no-spray statuses can be visualized in the below maps. Blue is no spray; red is spray.
+The spray / no-spray statuses can be visualized in the below maps. Blue is no spray; red is spray. Click to see details on each location.
 
-# Maps
+# Map
 
-## Interactive map
+## Spray / no-spray map
 
 ```{r}
 # Create a spatial version of census
@@ -484,117 +534,24 @@ popup = paste0('Household: ', no_spray$houseno_rev, ' Village number: ',
   no_spray$village_number, ' Cluster number: ', no_spray$cluster)) 
 ```
 
-## Static map
+
+## Cluster map
 
 ```{r}
-
-x <- census_spatial_ll
-clusters <- cluster_df$cluster
-clusters <- clusters[!is.na(clusters)]
-colors <- ifelse(cluster_df$status, 'red',
-                 ifelse(!cluster_df$status, 'blue',
-                        ifelse(is.na(cluster_df$status), 'grey',
-                               NA)))
-blue_palette <- brewer.pal(n = 9, 'Blues')[3:9]
-red_palette <- brewer.pal(n = 9, 'Reds')[3:9]
-green_palette <- brewer.pal(9, 'Greens')[3:9]
-orange_palette <- brewer.pal(9, 'Oranges')[3:9]
-
-blues <- colorRampPalette(c(blue_palette))(length(which(colors == 'blue')))
-reds <- colorRampPalette(c(red_palette))(length(which(colors == 'red')))
-new_colors <- rep(NA, length(colors))
-red_counter <- 1
-blue_counter <- 1
-for (i in 1:length(colors)){
-  if(is.na(colors[i])){
-    new_colors[i] <- 'grey'
-  } else 
-  if(colors[i] == 'red'){
-    new_colors[i] <- reds[red_counter]
-    red_counter <- red_counter + 1
-  } else
-  if(colors[i] == 'blue'){
-    new_colors[i] <- blues[blue_counter]
-    blue_counter <- blue_counter + 1
-  }
-}
-# colors <- new_colors
-colors <- colors
-
-plot(mop_ll)
-for (i in 1:length(clusters)){
-  message(i)
-  this_cluster <- clusters[i]
-  these_villages <- village_df$village_number[which(village_df$cluster == this_cluster)]
-  these_houses <- x[x$village_number %in% these_villages,]
-  # Get Convex hull
-  border <- gConvexHull(these_houses)
-  # Get a random color
-  the_colors <- colors[i]
-  if(!is.null(border)){
-    plot(border, add = T,
-       col = adjustcolor(the_colors, alpha.f = 0.1),
-       border = adjustcolor(the_colors, alpha.f = 0.3))
-    points(these_houses, pch = 1, cex = 0.05,
-           col = adjustcolor(the_colors, alpha.f = 0.6))
-  }
-}
-legend('bottomleft',
-       pch = NA,
-       legend = 'www.economicsofmalaria.com',
-       cex = 0.5,
-       bty = 'n')
-title(main = 'Cluster assignments')
-
-# legend('topleft',
-#        pch = 16,
-#        col = c('darkred', 'orange',
-#                'darkblue', 'lightblue',
-#                'grey'),
-#        legend = c('Spray', '',
-#                   'No spray', '',
-#                   'Unassigned'),
-#        ncol = 3,
-#        bty = 'n')
-legend('topleft',
-       pch = 16,
-       col = c('red', 'blue', 'grey'),
-       legend = c('Spray', 
-                  'No spray',
-                  'Unassigned'),
-       ncol = 3,
-       bty = 'n')
-
+the_colors <- colorRampPalette(brewer.pal(9, 'Spectral'))(length(unique(census$cluster)))
+colors <- sample(the_colors, length(the_colors))
+colors <- the_colors[as.numeric(factor(census$cluster))]
+colors[is.na(colors)] <- 'white'
+leaflet() %>%
+  addProviderTiles("Esri.WorldImagery") %>%
+  addPolylines(data = mop_ll, color = 'black') %>%
+  addCircleMarkers(lng = census$lng,
+  lat = census$lat,
+  color = colors,
+  fillColor = colors,
+  radius = 2.5,
+  opacity = 0,
+  fillOpacity = 0.5,
+  popup = paste0('Household: ', spray$houseno_rev, ' Village number: ',
+  spray$village_number, ' Cluster number: ', spray$cluster))
 ```
-
-```{r}
-# Write csv for carlos
-x <- x@data %>%
-  dplyr::select(village_number,
-                cluster,
-                status,
-                administrative_post,
-                locality,
-                village,
-                local_village_name,
-                houseno_rev,
-                head_name,
-                health_facility,
-                number_of_houses,
-                people_sleep,
-                number_of_children,
-                latitude,
-                longitude,
-                status) %>%
-  mutate(spray_status = ifelse(status,
-                               'spray',
-                               ifelse(!status,
-                                      'no spray',
-                                      NA))) %>%
-  dplyr::select(-status)
-# readr::write_csv(x, '~/Desktop/table_for_carlos.csv')
-
-```
-
-
-

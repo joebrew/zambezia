@@ -1,5 +1,5 @@
 ---
-title: Operational helper document
+title: Preliminary maps and tables
 author: CISM
 fig_height: 2.6
 fig_width: 4
@@ -29,6 +29,7 @@ library(leaflet)
 library(ggmap)
 library(readxl)
 library(dplyr)
+library(readr)
 
 # Basic knitr options
 opts_chunk$set(comment = NA, 
@@ -48,6 +49,10 @@ knit_engines$set(asis = function(options) {
 ```
 
 
+# Introduction
+
+This document contains tables and maps pertaining to villages, clusters, and spraying status of Mopeia households. Note: this is preliminary. It uses algorithmic cleaning to remove households which were likely misclassified into the wrong village, and has not been manually checked for accuracy.
+
 ```{r}
 #### READ IN AND CLEAN UP DATA
 
@@ -62,12 +67,14 @@ source('lib/get_zambezia.R')
 # Read in final spreadsheet, as provided by Orvalho
 # census <- read_excel('dropbox/final_joe_dataset.xlsx')
 
-# Read in final redcap dataset, as instructed by Charfudin 11 October 2016
-census <- readr::read_csv(file = 'redcap/CensusMopeia_DATA_2016-10-11_1541.csv')
-# Keep only relevant observations
-census <- census %>% filter(redcap_event_name == 'census_mopeia_core_arm_1')
-census <- data.frame(census)
+# # Read in final redcap dataset, as instructed by Charfudin 11 October 2016
+# census <- readr::read_csv(file = 'redcap/CensusMopeia_DATA_2016-10-11_1541.csv')
+# # Keep only relevant observations
+# census <- census %>% filter(redcap_event_name == 'census_mopeia_core_arm_1')
+# census <- data.frame(census)
 
+# Read in final dataset, as given by Orvahlo on October 12, 2016
+census <- read_excel('dropbox/20161012/household.xlsx')
 # Get more nicely named geographic coordinate column names
 census$lat <- census$y <- census$latitude <- census$gpc_lat
 census$lon <- census$lng <- census$longitude <-census$x <- census$gpc_lng
@@ -79,6 +86,8 @@ moz2 <- raster::getData('GADM', country = 'MOZ', level = 2)
 # Get a village number
 census$village_number <- 
   as.numeric(lapply(strsplit(census$houseno_rev, split = '-'), function(x){x[2]}))
+
+old_census <- census
 
 # Create a spatial version of census
 census_spatial <- census
@@ -122,9 +131,6 @@ census_villages <-
   summarise(correct_village_name = village[which(n == max(n))][1])
 ```
 
-# Introduction
-
-This document contains maps and tables pertaining to the households and bairros assigned to "spray" and "no-spray" status. Data cleaning has not been finished, so the content of this document should be considered preliminary.
 
 
 ```{r}
@@ -164,10 +170,17 @@ for (i in 1:nrow(village_df)){
   # to all other units
   distances <- gDistance(sub_census, byid = TRUE)
   median_distances <- apply(distances, 1, median)
+  # Get how close they are to the closest 80% of houses in the villages
+  closest_80 <- apply(distances,
+                      1,
+                      function(x){
+                        z <- sort(x)
+                        quantile(z, 0.8, na.rm = TRUE)
+                      })
 
   # From the vector of median distances, flag those which are abnormal
   threshold <- 20000
-  incorrect_house_ids <- sub_census$houseno_rev[median_distances > threshold]
+  incorrect_house_ids <- sub_census$houseno_rev[closest_80 > threshold]
   # Stick results into dataframe
   village_df$n_incorrect_houses[i] <- length(incorrect_house_ids)
   village_df$incorrect_houses[i] <- paste0(incorrect_house_ids, collapse = ', ')
@@ -175,6 +188,9 @@ for (i in 1:nrow(village_df)){
   # Add to the vector of incorrect houses 
   incorrect_houses <- c(incorrect_houses, incorrect_house_ids)
 }
+```
+
+```{r}
 
 # Reorder the village dataframe by size
 village_df <- 
@@ -209,36 +225,20 @@ incorrect_houses_df <-
 
 <!-- All in all, `r length(which(village_df$incorrect_houses > 0))` of `r nrow(village_df)` villages appear to have incorrect household inclusions. The below maps show each of these `r length(which(village_df$incorrect_houses > 0))` villages. Note the abnormal (and large) polygon shapes, due to the incorrect inclusions. -->
 
-```{r, eval = FALSE}
+```{r}
+village_df$problems <- village_df$incorrect_houses > 0
+village_df$row_number <- 1:nrow(village_df)
 incorrect_villages <- village_df[which(village_df$incorrect_houses > 0),]
-for(i in 1:nrow(incorrect_villages)){
-  this_village_number <- incorrect_villages$village_number[i]
-   # Get the points only
-  sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
-  # Plot Mopeia
-  plot(mop_ll)
-  # Get the border
-  border <- gConvexHull(sub_census)
-  # Plot the border
-  plot(border, add = TRUE, col = adjustcolor(color, alpha.f = 0.3),
-       border = adjustcolor(color, alpha.f = 0.8))
-  # Add the points
-  points(sub_census,
-         pch = '.',
-         col = adjustcolor(color, alpha.f = 0.6))
-  # Add title
-  title(main = paste0('Village number: ', unique_village_numbers[i]))
-}
 ```
 
 <!-- ## Addressing errors -->
 
 <!-- In order to address errors, we simply remove the `r length(incorrect_houses)` houses we suspect to be incorrectly classified.   -->
 
-```{r}
-# # NOT FILTERING OUT THOSE INCORRECT HOUSES
-# census <- census %>%
-#   filter(!houseno_rev %in% incorrect_houses)
+```{r, eval = TRUE}
+# # FILTERING OUT THOSE INCORRECT HOUSES
+census <- census %>%
+  filter(!houseno_rev %in% incorrect_houses)
 
 # Create a spatial version of census
 census_spatial <- census
@@ -252,7 +252,7 @@ census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
 ```
 
 
-```{r}
+```{r, eval = TRUE}
 # Remove those observations with no coordinates
 census <- census %>%
   filter(!is.na(lng), !is.na(lat))
@@ -292,32 +292,6 @@ census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
 census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
 ```
 
-<!-- This leaves us with `r length(unique(village_df$cluster))` clusters.  These clusters can be visualized below. -->
-
-```{r, eval = FALSE}
-plot(mop_ll)
-
-possible_colors <- rainbow(1000)
-clusters <- unique(sort(village_df$cluster))
-for (i in 1:length(clusters)){
-  this_cluster <- clusters[i]
-  these_villages <- village_df$village_number[which(village_df$cluster == this_cluster)]
-  these_houses <- census_spatial_ll[census_spatial_ll$village_number %in% these_villages,]
-  # Get Convex hull
-  border <- gConvexHull(these_houses)
-  # Get a random color
-  the_color <- sample(possible_colors, 1)
-  plot(border, add = T,
-       col = adjustcolor(the_color, alpha.f = 0.1),
-       border = adjustcolor(the_color, alpha.f = 0.5))
-  points(these_houses, pch = '.',
-         col = adjustcolor(the_color, alpha.f = 0.8))
-}
-```
-
-# Cluster assignation
-
-The breakdown of cluster assignments can be viewed below.
 
 ```{r}
 x <- village_df %>%
@@ -332,13 +306,9 @@ cluster_df <- census %>%
 
 x <- x %>%
   left_join(cluster_df)
-DT::datatable(x)
+# DT::datatable(x)
 
 ```
-
-# Spray / no-spray assignation
-
-The spray / no-spray designations were carried out in person. 
 
 
 ```{r}
@@ -384,14 +354,10 @@ cluster_df <-
 
 ```
 
-The below table shows the spray / no-spray status _by cluster_.
-
 ```{r}
 x <- cluster_df
-DT::datatable(x %>% mutate(spray = ifelse(status, 'spray', 'no spray')) %>% dplyr::select(-status))
+# DT::datatable(x %>% mutate(spray = ifelse(status, 'spray', 'no spray')) %>% dplyr::select(-status))
 ```
-
-The below table shows the spray / no-spray status _by village_.
 
 ```{r}
 x <- 
@@ -401,44 +367,15 @@ x <-
             cluster = first(cluster)) %>%
   left_join(cluster_df %>%
               dplyr::select(cluster, status))
-DT::datatable(x %>% mutate(spray = ifelse(status, 'spray', 'no spray')) %>% dplyr::select(-status))
+# DT::datatable(x %>% mutate(spray = ifelse(status, 'spray', 'no spray')) %>% dplyr::select(-status))
 # Write a csv
 # readr::write_csv(x, '~/Desktop/spray_no_spray_assignments.csv')
-```
-
-
-# Master table
-
-The below table shows each location, with the corresponding village name, head of household name, health facility name, etc.
-
-```{r}
-# Bring the statuses into census
-census <- census %>% 
-  left_join(cluster_df %>%
-              dplyr::select(cluster, status),
-            by = 'cluster')
-
-x <- census %>%
-  mutate(spray = ifelse(status, 'spray', 'no spray')) %>%
-  dplyr::select(cluster,
-                village_number,
-                spray,
-                houseno_rev,
-                head_name,
-                lat,
-                lng,
-                health_facility) %>%
-  arrange(cluster, village_number)
-DT::datatable(x)
-```
-
-The spray / no-spray statuses can be visualized in the below maps. Blue is no spray; red is spray.
-
-# Maps
-
-## Interactive map
-
-```{r}
+# Get spray status per row
+census <- left_join(
+  census,
+  cluster_df %>%
+    dplyr::select(cluster, status)
+)
 # Create a spatial version of census
 census_spatial <- census
 coordinates(census_spatial) <- ~x+y
@@ -449,152 +386,176 @@ census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
 # Later, we can switch back to lat/long:
 census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
 
-# # PLOT IT
-# plot(mop_ll)
-# cols <- ifelse(census$status == 'Spray', 'darkgreen', 'darkred')
-# points(census_spatial_ll,
-#        col = cols,
-#        pch = '.')
 
-# Divide into spray / no-spray
-spray <- census %>% filter(status)
-no_spray <- census %>% filter(!status)
-
-leaflet() %>%
-  addProviderTiles("Esri.WorldImagery") %>%
-  addPolylines(data = mop_ll, color = 'black') %>%
-  addCircleMarkers(lng = spray$lng,
-  lat = spray$lat,
-  color = colors,
-  fillColor = 'red',
-  radius = 2.5,
-  opacity = 0,
-  fillOpacity = 0.5,
-  popup = paste0('Household: ', spray$houseno_rev, ' Village number: ',
-  spray$village_number, ' Cluster number: ', spray$cluster)) %>%
-  
-  addCircleMarkers(lng = no_spray$lng,
-  lat = no_spray$lat,
-  color = colors,
-  fillColor = 'blue',
-  radius = 2.5,
-  opacity = 0,
-  fillOpacity = 0.5,
-popup = paste0('Household: ', no_spray$houseno_rev, ' Village number: ',
-  no_spray$village_number, ' Cluster number: ', no_spray$cluster)) 
+village_list <- list()
+for (i in 1:nrow(village_df)){
+  village_list[[i]] <- village_df[i,]
+}
 ```
 
-## Static map
+
+# Table
+
+The below table shows each household in the dataset. It is interactive and searchable. In the cases in which a `village_number` has more than one `local_village_name`, this indicates a discrepancy in the raw data.
 
 ```{r}
-
-x <- census_spatial_ll
-clusters <- cluster_df$cluster
-clusters <- clusters[!is.na(clusters)]
-colors <- ifelse(cluster_df$status, 'red',
-                 ifelse(!cluster_df$status, 'blue',
-                        ifelse(is.na(cluster_df$status), 'grey',
-                               NA)))
-blue_palette <- brewer.pal(n = 9, 'Blues')[3:9]
-red_palette <- brewer.pal(n = 9, 'Reds')[3:9]
-green_palette <- brewer.pal(9, 'Greens')[3:9]
-orange_palette <- brewer.pal(9, 'Oranges')[3:9]
-
-blues <- colorRampPalette(c(blue_palette))(length(which(colors == 'blue')))
-reds <- colorRampPalette(c(red_palette))(length(which(colors == 'red')))
-new_colors <- rep(NA, length(colors))
-red_counter <- 1
-blue_counter <- 1
-for (i in 1:length(colors)){
-  if(is.na(colors[i])){
-    new_colors[i] <- 'grey'
-  } else 
-  if(colors[i] == 'red'){
-    new_colors[i] <- reds[red_counter]
-    red_counter <- red_counter + 1
-  } else
-  if(colors[i] == 'blue'){
-    new_colors[i] <- blues[blue_counter]
-    blue_counter <- blue_counter + 1
-  }
-}
-# colors <- new_colors
-colors <- colors
-
-plot(mop_ll)
-for (i in 1:length(clusters)){
-  message(i)
-  this_cluster <- clusters[i]
-  these_villages <- village_df$village_number[which(village_df$cluster == this_cluster)]
-  these_houses <- x[x$village_number %in% these_villages,]
-  # Get Convex hull
-  border <- gConvexHull(these_houses)
-  # Get a random color
-  the_colors <- colors[i]
-  if(!is.null(border)){
-    plot(border, add = T,
-       col = adjustcolor(the_colors, alpha.f = 0.1),
-       border = adjustcolor(the_colors, alpha.f = 0.3))
-    points(these_houses, pch = 1, cex = 0.05,
-           col = adjustcolor(the_colors, alpha.f = 0.6))
-  }
-}
-legend('bottomleft',
-       pch = NA,
-       legend = 'www.economicsofmalaria.com',
-       cex = 0.5,
-       bty = 'n')
-title(main = 'Cluster assignments')
-
-# legend('topleft',
-#        pch = 16,
-#        col = c('darkred', 'orange',
-#                'darkblue', 'lightblue',
-#                'grey'),
-#        legend = c('Spray', '',
-#                   'No spray', '',
-#                   'Unassigned'),
-#        ncol = 3,
-#        bty = 'n')
-legend('topleft',
-       pch = 16,
-       col = c('red', 'blue', 'grey'),
-       legend = c('Spray', 
-                  'No spray',
-                  'Unassigned'),
-       ncol = 3,
-       bty = 'n')
-
-```
-
-```{r}
-# Write csv for carlos
-x <- x@data %>%
-  dplyr::select(village_number,
+x <- census %>%
+  dplyr::select(status,
                 cluster,
-                status,
-                administrative_post,
-                locality,
-                village,
-                local_village_name,
+                village_number,
                 houseno_rev,
-                head_name,
-                health_facility,
-                number_of_houses,
-                people_sleep,
-                number_of_children,
-                latitude,
-                longitude,
-                status) %>%
-  mutate(spray_status = ifelse(status,
-                               'spray',
-                               ifelse(!status,
-                                      'no spray',
-                                      NA))) %>%
-  dplyr::select(-status)
-# readr::write_csv(x, '~/Desktop/table_for_carlos.csv')
+                local_village_name,
+                locality,
+                administrative_post,
+                health_facility) %>%
+  mutate(status = ifelse(is.na(status), 'Undetermined', ifelse(status, 'Spray', 'No spray'))) %>%
+  arrange(village_number, houseno_rev)
+x$local_village_name <- stringr::str_replace_all(x$local_village_name,"[^[:graph:]]", " ")
+
+DT::datatable(x)
+
+# Write table for joe wagman
+x <- left_join(old_census %>% 
+                 dplyr::select(houseno_rev),
+               x %>%
+                 mutate(problematic = FALSE)) %>%
+  mutate(problematic = ifelse(is.na(problematic), TRUE, problematic)) 
+x <- x %>% arrange(village_number, houseno_rev)
+write_csv(x, '~/Desktop/table_for_wagman.csv')
+
+# Also make a csv of each village_number with village names
+x <- old_census %>%
+  group_by(village_number, local_village_name) %>%
+  tally %>%
+  arrange(village_number, desc(n)) %>%
+  rename(frequency = n)
+write_csv(x, '~/Desktop/table_of_village_names.csv')
+```
+
+# Maps
+
+```{r}
+
+# CREATE FUNCTION FOR LEAFLET MAP OF VILLAGE
+leaflet_village <- function(i){
+  
+    this_village_number <- village_df$village_number[i]
+   # Get the points only
+  sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
+  # Get the border
+  border <- gConvexHull(sub_census)
+  
+  the_data <- sub_census
+  the_border <- border
+  
+  # Generate colors
+  colors <- rep('blue', nrow(the_data))
+  colors[the_data$status] <- 'red'
+  
+  # The village number
+  the_village_number <- the_data$village_number[1]
+  
+  # The village df row
+  the_village_df_row <- village_df %>% filter(village_number == the_village_number)
+  
+  #   # Legend title
+  legend_title <- paste0('Village: ',
+           the_village_number)
+  
+
+  ll <- 
+  leaflet() %>%
+  addProviderTiles("OpenStreetMap.Mapnik") %>%
+  addCircleMarkers(lng = the_data$lng,
+    lat = the_data$lat,
+    color = colors,
+    fillColor = colors,
+    radius = 2.5,
+    opacity = 0,
+    fillOpacity = 0.5,
+    popup = paste0('Household: ', the_data$houseno_rev, ' Village number: ',
+    the_data$village_number)) %>%
+    addLegend("bottomright", 
+              colors = c('red', 'blue'),
+              labels = c(paste0('Spray'), 
+                         'No spray'),
+    title = legend_title,
+    opacity = 1 )
+  
+  if(class(border)[[1]] != 'SpatialPoints'){
+    ll <-
+      ll %>%
+          addPolylines(data = the_border, color = 'black',
+                 dashArray = '1,5')
+  }
+  return(ll)
+}
+
+
 
 ```
 
+## Master static map (all villages in one map)
+
+The below map shows each household (point) with each village's boundary (polygon). Colors are random, but each village gets only one color. This map was produced after removing suspicious/incorrectly coded houses (ie, those that were far from their supposed village.)
+
+```{r}
+plot(mop_ll)
+cols <- rainbow(nrow(village_df))
+for (i in 1:nrow(village_df)){
+  
+    this_village_number <- village_df$village_number[i]
+   # Get the points only
+  sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
+  # Get the border
+  border <- gConvexHull(sub_census)
+  
+  the_data <- sub_census
+  the_border <- border
+  
+  plot(the_border, add = TRUE,
+       col = adjustcolor(cols[i], alpha.f = 0.2),
+       border =  adjustcolor(cols[i], alpha.f = 0.3))
+  points(the_data, pch = '.',
+         col = adjustcolor(cols[i], alpha.f = 0.6))
+}
+```
+
+## Interactive maps (one per village)
+
+The below maps show each village. Households suspected to be misclassified into the wrong village have been removed. Because this removal was done algorithmically (and relatively quickly), it has not been fine-tuned (hence, the presence of some houses which are very far from the others in the village). These are preliminary maps, and should be understood as such.
+
+
+```{r}
+village_df$row_number <- 1:nrow(village_df)
+maps <- lapply(village_df$row_number, function(x){
+  leaflet_village(x)
+})
+
+htmltools::tagList(maps)
+# for(i in 1:3){
+# # for(i in 1:nrow(village_df)){
+#   this_village_number <- village_df$village_number[i]
+#    # Get the points only
+#   sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
+#   # Get the border
+#   border <- gConvexHull(sub_census)
+# 
+#   leaflet_village(the_data = sub_census,
+#                   the_border = border) 
+#   
+#   #   # Plot Mopeia
+#   # plot(mop_ll)
+#   # # Plot the border
+#   # plot(border, add = TRUE, col = adjustcolor(color, alpha.f = 0.3),
+#   #      border = adjustcolor(color, alpha.f = 0.8))
+#   # # Add the points
+#   # points(sub_census,
+#   #        pch = '.',
+#   #        col = adjustcolor(color, alpha.f = 0.6))
+#   # # Add title
+#   # title(main = paste0('Village number: ', unique_village_numbers[i]))
+# }
+```
 
 

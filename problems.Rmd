@@ -1,0 +1,422 @@
+---
+title: Identificação de problemas
+author: CISM
+fig_height: 2.6
+fig_width: 4
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: yeti
+---
+```{r, echo = FALSE, warning = FALSE, message = FALSE, comment = NA, error= FALSE, cache = FALSE}
+# No scientific notation
+options(scipen=999)
+
+# Packages 
+library(xtable)
+library(knitr)
+library(ggplot2) 
+# library(dplyr)
+library(rgeos)
+library(RColorBrewer)
+library(Rmisc)
+# Libraries
+library(rgdal)
+library(raster)
+library(sp)
+library(leaflet)
+library(ggmap)
+library(readxl)
+library(dplyr)
+library(readr)
+
+# Basic knitr options
+opts_chunk$set(comment = NA, 
+               echo = FALSE, 
+               warning = FALSE, 
+               message = FALSE, 
+               error = TRUE, # Render report, even with errors
+               cache = F)
+
+```
+
+```{r setup, include=FALSE, echo = FALSE}
+library(knitr)
+knit_engines$set(asis = function(options) {
+  if (options$echo && options$eval) knit_child(text = options$code)
+})
+```
+
+
+# Introduction
+
+This document is meant to help in the identification of problems with the Mopeia census data. It is meant for internal use.
+
+```{r}
+#### READ IN AND CLEAN UP DATA
+
+# Source script
+source('lib/get_zambezia.R')
+
+# # Read in zambezia data from odk database
+# get_zambezia(get_fresh = FALSE, save = FALSE)
+# # Get a more nicely named core census file
+# census <- CENSUS_MOPEIA_CORE
+
+# Read in final spreadsheet, as provided by Orvalho
+# census <- read_excel('dropbox/final_joe_dataset.xlsx')
+
+# # Read in final redcap dataset, as instructed by Charfudin 11 October 2016
+# census <- readr::read_csv(file = 'redcap/CensusMopeia_DATA_2016-10-11_1541.csv')
+# # Keep only relevant observations
+# census <- census %>% filter(redcap_event_name == 'census_mopeia_core_arm_1')
+# census <- data.frame(census)
+
+# Read in final dataset, as given by Orvahlo on October 12, 2016
+census <- read_excel('dropbox/20161012/household.xlsx')
+
+# Get more nicely named geographic coordinate column names
+census$lat <- census$y <- census$latitude <- census$gpc_lat
+census$lon <- census$lng <- census$longitude <-census$x <- census$gpc_lng
+
+# Get a shapefile for Mozambique
+moz <- raster::getData('GADM', country = 'MOZ', level = 3)
+moz2 <- raster::getData('GADM', country = 'MOZ', level = 2)
+
+# Get a village number
+census$village_number <- 
+  as.numeric(lapply(strsplit(census$houseno_rev, split = '-'), function(x){x[2]}))
+
+# Create a spatial version of census
+census_spatial <- census
+coordinates(census_spatial) <- ~x+y
+proj4string(census_spatial) <- proj4string(moz)
+
+# Subset the shapefile just to Zambezia
+zam <- moz[moz@data$NAME_1 == 'Zambezia',]
+
+# Subset further to just Mopeia
+mop <- moz2[moz2@data$NAME_2 == 'Mopeia',]
+
+# Save the original proj4string
+original_proj4string <- proj4string(moz)
+
+# Prepare ggmap-compatible objects
+zam_fortified <- fortify(zam, id = ID_3)
+mop_fortified <- fortify(mop, id = ID_3)
+zam_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+                               lat = mean(census$lat, na.rm = TRUE)),
+                  maptype = 'satellite')
+mop_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+                               lat = mean(census$lat, na.rm = TRUE)),
+                  maptype = 'satellite')
+
+# Switch to a projected format
+# Project
+census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
+mop <- spTransform(mop, CRS("+init=epsg:3347"))
+# Later, we can switch back to lat/long:
+census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
+mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
+# proj4string(mop_ll) <- proj4string(zam)
+
+# Get the most prevalent village name for each village number
+census_villages <-
+  census %>%
+  dplyr::group_by(village_number, village) %>% 
+  tally %>%
+  group_by(village_number) %>%
+  summarise(correct_village_name = village[which(n == max(n))][1])
+```
+
+
+
+```{r}
+# Get the area and other metrics for each village
+unique_village_numbers <- sort(unique(census$village_number))
+village_df <- census %>%
+  group_by(village_number) %>%
+  summarise(n_children = sum(number_of_children),
+            houses_with_any_children = length(which(number_of_children > 0)),
+            houses = n(),
+            area = NA,
+            incorrect_houses = NA,
+            n_incorrect_houses = NA)
+
+# Create placeholder vector of incorrect houses
+incorrect_houses <- c()
+  
+color <- 'darkgreen'
+for (i in 1:nrow(village_df)){
+  message(i)
+  # Get village name
+  this_village <- village_df$village_number[i]
+    # Get the points only
+  sub_census <- 
+    census_spatial_ll[which(census_spatial_ll$village_number == this_village),]
+  # Get the border
+  border <- gConvexHull(sub_census)
+  # Calculate area
+  # if(!is.null(border)){
+    # this_area <- gArea(border)
+    # Populate area in dataframe
+    # village_df$area[i] <- this_area
+  # }
+  
+  # Go through each household in the unit and calculate distance
+  # to all other units
+  # distances <- gDistance(sub_census, byid = TRUE)
+  distances <- spDists(sub_census, longlat = TRUE, diagonal = FALSE)
+  median_distances <- apply(distances, 1, function(x){quantile(x, 0.75, na.rm = TRUE)})
+
+  # Keep only the closest 50 percent
+  close_cluster <- sub_census[which(median_distances < median(median_distances, na.rm = TRUE)),]
+  
+  # Get the centroids of the close cluster
+  centroids <- c(mean(close_cluster$lng, na.rm = TRUE), 
+                 mean(close_cluster$lat, na.rm = TRUE))
+  
+  # Get distance from every household to those centroids
+  distances_to_centroid <- spDistsN1(sub_census,
+                                     centroids,
+                                     longlat = TRUE)
+
+  # From the vector of median distances, flag those which are abnormal
+  threshold <- 6
+  incorrect_house_ids <- sub_census$houseno_rev[which(distances_to_centroid > threshold)]
+  # Stick results into dataframe
+  village_df$n_incorrect_houses[i] <- length(incorrect_house_ids)
+  village_df$incorrect_houses[i] <- paste0(incorrect_house_ids, collapse = ', ')
+  
+  # Add to the vector of incorrect houses 
+  incorrect_houses <- c(incorrect_houses, incorrect_house_ids)
+  
+  plot(mop_ll)
+  
+  points(sub_census,
+       col = ifelse(sub_census$houseno_rev %in% incorrect_house_ids, 
+                    'red',
+                    'blue'))
+  plot(border, add = T)
+  title(main = village_df$village_number[i])
+  Sys.sleep(1)
+  
+}
+
+# Reorder the village dataframe by size
+village_df <- 
+  village_df %>%
+  arrange(desc(houses))
+
+# Print table
+x <- village_df %>%
+  dplyr::select(-incorrect_houses)
+# DT::datatable(x)
+
+# MERGE WITH THE CLUSTER ASSIGNMENTS FROM AUGUST
+cluster_assignments <- readr::read_csv('outputs/cluster_assignments.csv')
+village_df <- 
+  village_df %>%
+  left_join(cluster_assignments)
+
+```
+
+<!-- All in all, `r length(incorrect_houses)` houses are suspected to be incorrectly classified (ie, either their geographic coordinates are incorrect, or their household ID number is incorrect). These are those IDs: -->
+
+```{r}
+incorrect_houses_df <- data.frame(houseno_rev = incorrect_houses)
+incorrect_houses_df <-
+  incorrect_houses_df %>%
+  left_join(census %>%
+              dplyr::select(houseno_rev, village_number)) %>%
+  arrange(village_number) %>%
+  dplyr::select(village_number, houseno_rev)
+# DT::datatable(incorrect_houses_df)
+```
+
+<!-- All in all, `r length(which(village_df$incorrect_houses > 0))` of `r nrow(village_df)` villages appear to have incorrect household inclusions. The below maps show each of these `r length(which(village_df$incorrect_houses > 0))` villages. Note the abnormal (and large) polygon shapes, due to the incorrect inclusions. -->
+
+# Village maps
+
+The below maps show each village, as well as the boundary of that village's area.
+
+```{r, eval = TRUE}
+village_df$problems <- village_df$incorrect_houses > 0
+village_df$row_number <- 1:nrow(village_df)
+incorrect_villages <- village_df[which(village_df$incorrect_houses > 0),]
+
+village_list <- list()
+for (i in 1:nrow(village_df)){
+  village_list[[i]] <- village_df[i,]
+}
+
+# CREATE FUNCTION FOR LEAFLET MAP OF VILLAGE
+leaflet_village <- function(i){
+  
+    this_village_number <- village_df$village_number[i]
+   # Get the points only
+  sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
+  # Get the border
+  border <- gConvexHull(sub_census)
+  
+  the_data <- sub_census
+  the_border <- border
+  
+  # Generate colors
+  colors <- rep('blue', nrow(the_data))
+  colors[the_data$houseno_rev %in% incorrect_houses] <- 'red'
+  
+  # The village number
+  the_village_number <- the_data$village_number[1]
+  
+  # The village df row
+  the_village_df_row <- village_df %>% filter(village_number == the_village_number)
+  
+  #   # Legend title
+  legend_title <- paste0('Village: ',
+           the_village_number,
+           '. ',
+           ifelse(the_village_df_row$problems,
+                  paste0(the_village_df_row$n_incorrect_houses, ' casas suspeitas', collapse = ''),
+                  'Nao ha problemas'))
+  
+
+  ll <- 
+  leaflet() %>%
+  addProviderTiles("OpenStreetMap.Mapnik") %>%
+  addCircleMarkers(lng = the_data$lng,
+    lat = the_data$lat,
+    color = colors,
+    fillColor = colors,
+    radius = 2.5,
+    opacity = 0,
+    fillOpacity = 0.5,
+    popup = paste0('Household: ', the_data$houseno_rev, ' Village number: ',
+    the_data$village_number)) %>%
+    addLegend("bottomright", 
+              colors = c('red', 'blue'),
+              labels = c(paste0('Suspected: ',
+                                the_village_df_row$n_incorrect_houses), 
+                         paste0('Okay: ',
+                         the_village_df_row$houses - the_village_df_row$n_incorrect_houses)),
+    title = legend_title,
+    opacity = 1 )
+  
+  if(class(border)[[1]] != 'SpatialPoints'){
+    ll <-
+      ll %>%
+          addPolylines(data = the_border, color = 'black',
+                 dashArray = '1,5')
+  }
+  return(ll)
+}
+
+maps <- lapply(village_df$row_number, function(x){
+  leaflet_village(x)
+})
+
+htmltools::tagList(maps)
+# for(i in 1:3){
+# # for(i in 1:nrow(village_df)){
+#   this_village_number <- village_df$village_number[i]
+#    # Get the points only
+#   sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
+#   # Get the border
+#   border <- gConvexHull(sub_census)
+# 
+#   leaflet_village(the_data = sub_census,
+#                   the_border = border) 
+#   
+#   #   # Plot Mopeia
+#   # plot(mop_ll)
+#   # # Plot the border
+#   # plot(border, add = TRUE, col = adjustcolor(color, alpha.f = 0.3),
+#   #      border = adjustcolor(color, alpha.f = 0.8))
+#   # # Add the points
+#   # points(sub_census,
+#   #        pch = '.',
+#   #        col = adjustcolor(color, alpha.f = 0.6))
+#   # # Add title
+#   # title(main = paste0('Village number: ', unique_village_numbers[i]))
+# }
+```
+
+# Table of all houses and problems
+
+What follows is a table of all households, and whether they are flagged as incorrect or not.
+
+```{r}
+x <- census %>%
+  mutate(suspected = houseno_rev %in% incorrect_houses) %>%
+  mutate(suspected = ifelse(suspected, 'suspected', 'okay')) %>%
+  dplyr::select(village_number,
+                houseno_rev,
+                suspected,
+                administrative_post,
+                local_village_name) %>%
+  arrange(village_number)
+x$local_village_name <- stringr::str_replace_all(x$local_village_name,"[^[:graph:]]", " ")
+DT::datatable(x)
+```
+
+<!-- ## Addressing errors -->
+
+<!-- In order to address errors, we simply remove the `r length(incorrect_houses)` houses we suspect to be incorrectly classified.   -->
+
+```{r, eval = FALSE}
+# # NOT FILTERING OUT THOSE INCORRECT HOUSES
+census <- census %>%
+  filter(!houseno_rev %in% incorrect_houses)
+
+# Create a spatial version of census
+census_spatial <- census
+coordinates(census_spatial) <- ~x+y
+proj4string(census_spatial) <- proj4string(moz)
+# Switch to a projected format
+# Project
+census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
+# Later, we can switch back to lat/long:
+census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
+```
+
+
+```{r, eval = FALSE}
+# Remove those observations with no coordinates
+census <- census %>%
+  filter(!is.na(lng), !is.na(lat))
+
+# Get centroids
+village_df <-
+  village_df %>%
+  left_join(census %>%
+    group_by(village_number) %>%
+    summarise(x_centroid = mean(lng, na.rm = TRUE),
+              y_centroid = mean(lat, na.rm = TRUE)))
+
+# Remove the villages with no coordinates
+village_df <- 
+  village_df %>%
+  filter(!is.na(x_centroid),
+         !is.na(y_centroid))
+
+# Get distances between villages
+distances <- spDists(x = as.matrix(village_df %>% dplyr::select(x_centroid, y_centroid)),
+        longlat = TRUE,
+        diagonal = FALSE)
+
+# Bring cluster type into census
+census <- census %>% 
+  left_join(village_df %>%
+              dplyr::select(village_number, cluster),
+            by = 'village_number')
+# Create a spatial version of census
+census_spatial <- census
+coordinates(census_spatial) <- ~x+y
+proj4string(census_spatial) <- proj4string(moz)
+# Switch to a projected format
+# Project
+census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
+# Later, we can switch back to lat/long:
+census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
+```
