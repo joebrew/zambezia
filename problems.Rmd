@@ -385,7 +385,9 @@ edgar <- census %>%
                 locality,
                 village,
                 local_village_name,
-                dinq) %>%
+                dinq,
+                lng,
+                lat) %>%
   rename(date_survey = dinq)
 edgar$suspeito <- ifelse(edgar$houseno_rev %in% incorrect_houses,
                          'Suspeito',

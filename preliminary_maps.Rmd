@@ -412,24 +412,74 @@ x <- census %>%
   arrange(village_number, houseno_rev)
 x$local_village_name <- stringr::str_replace_all(x$local_village_name,"[^[:graph:]]", " ")
 
-DT::datatable(x)
+# DT::datatable(x)
+# 
+# # Write table for joe wagman
+# x <- left_join(old_census %>% 
+#                  dplyr::select(houseno_rev),
+#                x %>%
+#                  mutate(problematic = FALSE)) %>%
+#   mutate(problematic = ifelse(is.na(problematic), TRUE, problematic)) 
+# x <- x %>% arrange(village_number, houseno_rev)
+# write_csv(x, '~/Desktop/table_for_wagman.csv')
 
-# Write table for joe wagman
+# Get a table for the October 17 request
+x <- census %>%
+  dplyr::select(status,
+                cluster,
+                village_number,
+                houseno_rev,
+                village,
+                local_village_name,
+                other_village,
+                locality,
+                administrative_post,
+                health_facility,
+                head_name,
+                lat,
+                lng) %>%
+  mutate(status = ifelse(is.na(status), 'Undetermined', ifelse(status, 'Spray', 'No spray'))) %>%
+  
+  arrange(village_number, houseno_rev)
+x$local_village_name <- stringr::str_replace_all(x$local_village_name,"[^[:graph:]]", " ")
+
+
+# Write table for edgar
 x <- left_join(old_census %>% 
                  dplyr::select(houseno_rev),
                x %>%
                  mutate(problematic = FALSE)) %>%
   mutate(problematic = ifelse(is.na(problematic), TRUE, problematic)) 
 x <- x %>% arrange(village_number, houseno_rev)
-write_csv(x, '~/Desktop/table_for_wagman.csv')
+
+# Keep only relevant variables
+x <- x %>%
+  dplyr::select(administrative_post,
+                locality,
+                local_village_name,
+                houseno_rev,
+                head_name,
+                status,
+                problematic,
+                lat,
+                lng) %>%
+  rename(`Administrative name` = administrative_post,
+         `Locality name` = locality,
+         `Local village name` = local_village_name,
+         `Revised house number` = houseno_rev,
+         `Spray status` = status,
+         `Head of household` = head_name,
+         Latitude = lat,
+         Longitude = lng)
+write_csv(x, '~/Desktop/rose_lourdes_table.csv')
 
 # Also make a csv of each village_number with village names
-x <- old_census %>%
-  group_by(village_number, local_village_name) %>%
-  tally %>%
-  arrange(village_number, desc(n)) %>%
-  rename(frequency = n)
-write_csv(x, '~/Desktop/table_of_village_names.csv')
+# x <- old_census %>%
+#   group_by(village_number, local_village_name) %>%
+#   tally %>%
+#   arrange(village_number, desc(n)) %>%
+#   rename(frequency = n)
+# write_csv(x, '~/Desktop/table_of_village_names.csv')
 ```
 
 # Maps
