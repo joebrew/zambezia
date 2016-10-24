@@ -39,6 +39,9 @@ opts_chunk$set(comment = NA,
                error = TRUE, # Render report, even with errors
                cache = F)
 
+# Helpers
+source('lib/get_zambezia.R')
+source('lib/helpers.R')
 ```
 
 ```{r setup, include=FALSE, echo = FALSE}
@@ -55,23 +58,6 @@ This document is meant to help in the identification of problems with the Mopeia
 
 ```{r}
 #### READ IN AND CLEAN UP DATA
-
-# Source script
-source('lib/get_zambezia.R')
-
-# # Read in zambezia data from odk database
-# get_zambezia(get_fresh = FALSE, save = FALSE)
-# # Get a more nicely named core census file
-# census <- CENSUS_MOPEIA_CORE
-
-# Read in final spreadsheet, as provided by Orvalho
-# census <- read_excel('dropbox/final_joe_dataset.xlsx')
-
-# # Read in final redcap dataset, as instructed by Charfudin 11 October 2016
-# census <- readr::read_csv(file = 'redcap/CensusMopeia_DATA_2016-10-11_1541.csv')
-# # Keep only relevant observations
-# census <- census %>% filter(redcap_event_name == 'census_mopeia_core_arm_1')
-# census <- data.frame(census)
 
 # Read in final dataset, as given by Orvahlo on October 12, 2016
 census <- read_excel('dropbox/20161012/household.xlsx')
@@ -140,95 +126,17 @@ village_df <- make_village_df(census = census)
 identify_problems()
 ```
 
-<!-- All in all, `r length(incorrect_houses)` houses are suspected to be incorrectly classified (ie, either their geographic coordinates are incorrect, or their household ID number is incorrect). These are those IDs: -->
-
-```{r}
-incorrect_houses_df <- data.frame(houseno_rev = incorrect_houses)
-incorrect_houses_df <-
-  incorrect_houses_df %>%
-  left_join(census %>%
-              dplyr::select(houseno_rev, village_number)) %>%
-  arrange(village_number) %>%
-  dplyr::select(village_number, houseno_rev)
-# DT::datatable(incorrect_houses_df)
-```
-
-<!-- All in all, `r length(which(village_df$incorrect_houses > 0))` of `r nrow(village_df)` villages appear to have incorrect household inclusions. The below maps show each of these `r length(which(village_df$incorrect_houses > 0))` villages. Note the abnormal (and large) polygon shapes, due to the incorrect inclusions. -->
-
 # Village maps
 
 The below maps show each village, as well as the boundary of that village's area.
 
 ```{r, eval = TRUE}
-village_df$problems <- village_df$incorrect_houses > 0
-village_df$row_number <- 1:nrow(village_df)
-incorrect_villages <- village_df[which(village_df$incorrect_houses > 0),]
+# 
+# village_list <- list()
+# for (i in 1:nrow(village_df)){
+#   village_list[[i]] <- village_df[i,]
+# }
 
-village_list <- list()
-for (i in 1:nrow(village_df)){
-  village_list[[i]] <- village_df[i,]
-}
-
-# CREATE FUNCTION FOR LEAFLET MAP OF VILLAGE
-leaflet_village <- function(i){
-  
-    this_village_number <- village_df$village_number[i]
-   # Get the points only
-  sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
-  # Get the border
-  border <- gConvexHull(sub_census)
-  
-  the_data <- sub_census
-  the_border <- border
-  
-  # Generate colors
-  colors <- rep('blue', nrow(the_data))
-  colors[the_data$houseno_rev %in% incorrect_houses] <- 'red'
-  
-  # The village number
-  the_village_number <- the_data$village_number[1]
-  
-  # The village df row
-  the_village_df_row <- village_df %>% filter(village_number == the_village_number)
-  
-  #   # Legend title
-  legend_title <- paste0('Village: ',
-           the_village_number,
-           '. ',
-           ifelse(the_village_df_row$problems,
-                  paste0(the_village_df_row$n_incorrect_houses, ' casas suspeitas', collapse = ''),
-                  'Nao ha problemas'))
-  
-
-  ll <- 
-  leaflet() %>%
-  addProviderTiles("OpenStreetMap.Mapnik") %>%
-  addCircleMarkers(lng = the_data$lng,
-    lat = the_data$lat,
-    color = colors,
-    fillColor = colors,
-    radius = 2.5,
-    opacity = 0,
-    fillOpacity = 0.5,
-    popup = paste0('Household: ', the_data$houseno_rev, ' Village number: ',
-    the_data$village_number)) %>%
-    addLegend("bottomright", 
-              colors = c('red', 'blue'),
-              labels = c(paste0('Suspected: ',
-                                the_village_df_row$n_incorrect_houses), 
-                         paste0('Okay: ',
-                         the_village_df_row$houses - the_village_df_row$n_incorrect_houses)),
-    title = legend_title,
-    opacity = 1 )
-  
-  if(class(border)[[1]] != 'SpatialPoints'){
-    ll <-
-      ll %>%
-          addPolylines(data = the_border, color = 'black',
-                 dashArray = '1,5')
-  }
-  return(ll)
-}
 
 maps <- lapply(village_df$row_number, function(x){
   leaflet_village(x)

@@ -451,11 +451,15 @@ x <- left_join(old_census %>%
                  mutate(problematic = FALSE)) %>%
   mutate(problematic = ifelse(is.na(problematic), TRUE, problematic)) 
 x <- x %>% arrange(village_number, houseno_rev)
+x <- x  %>%
+  # Join with locality names
+  left_join(read_csv('locality_names.csv')) 
 
 # Keep only relevant variables
 x <- x %>%
   dplyr::select(administrative_post,
                 locality,
+                locality_name,
                 local_village_name,
                 houseno_rev,
                 head_name,
@@ -464,7 +468,8 @@ x <- x %>%
                 lat,
                 lng) %>%
   rename(`Administrative name` = administrative_post,
-         `Locality name` = locality,
+         `Locality number` = locality,
+         `Locality name` = locality_name,
          `Local village name` = local_village_name,
          `Revised house number` = houseno_rev,
          `Spray status` = status,
