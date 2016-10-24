@@ -419,13 +419,43 @@ leaflet_village_master <- function(){
   ll <-  
     leaflet() %>%
     # addProviderTiles("OpenStreetMap.Mapnik") %>%
-    addProviderTiles("Esri.WorldImagery") %>%
+    # addProviderTiles("Esri.WorldImagery") %>%
     # addProviderTiles("CartoDB.PositronOnlyLabels") %>%
     # addProviderTiles("Stamen.Watercolor") %>% 
-    # addProviderTiles("Stamen.TonerHybrid") %>%
+    addProviderTiles("Stamen.Toner") %>%
     addProviderTiles('Stamen.TonerLabels') 
   
+  # Now loop through and add borders
+  for (i in 1:nrow(village_df)){
+    message(i)
+    this_village_number <- village_df$village_number[i]
+    if(!is.na(this_village_number)){
+      # Get the points only
+      sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
+      sub_census_projected <- 
+        census_spatial[which(census_spatial$village_number == this_village_number),]
+      
+      # Get the border
+      border <- gConvexHull(sub_census)
+      
+      the_border <- border
+      
+      if(class(border)[[1]] != 'SpatialPoints'){
+        this_color <- village_colors$color[i]
+        ll <-
+          ll %>%
+          addPolylines(data = the_border, color = this_color,
+                       # dashArray = '1,5',
+                       opacity = 0.6,
+                       popup = village_df$village_number[i]) %>%
+          addPolygons(data = the_border,
+                      color = this_color,
+                      popup = village_df$village_number[i])
+      }
+    }
+  }
   
+  # Add all points
   ll <-
     ll %>%
     addCircleMarkers(lng = census_spatial_ll$lng,
@@ -437,6 +467,7 @@ leaflet_village_master <- function(){
                      fillOpacity = 0.5,
                      popup = paste0('Household: ', census_spatial_ll$house_number, ' Village number: ',
                                     census_spatial_ll$village_number)) 
+  
   
   return(ll)
 }

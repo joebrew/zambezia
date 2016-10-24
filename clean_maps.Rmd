@@ -55,7 +55,7 @@ knit_engines$set(asis = function(options) {
 
 # Introduction
 
-This document contains maps and tables pertaining to the (cleaned) Mopeia trial data. It was produced mid day (GMT +2) on Monday, October 24th, 2016.
+This document contains maps and tables pertaining to the (cleaned) Mopeia trial data. It was produced mid day (GMT +2) on Monday, October 24th, 2016. It uses data sent from Charfudin Sacoor to Joe Brew on the morning of Monday, October 24th, 2016 (`Limpesa_Final__241016_For maps.xlsx`).
 
 ```{r}
 #### READ IN AND CLEAN UP DATA
@@ -133,12 +133,6 @@ if('temp.RData' %in% dir()){
 
 ```
 
-# Master map
-
-```{r}
-leaflet_village_master()
-```
-
 # Village-specific maps
 
 The below maps show each village, as well as the boundary of that village's area.
@@ -151,6 +145,12 @@ maps <- lapply(village_df$row_number, function(x){
 htmltools::tagList(maps)
 ```
 
+
+# Master map
+
+```{r}
+leaflet_village_master()
+```
 
 
 ```{r}
