@@ -59,6 +59,9 @@ knit_engines$set(asis = function(options) {
 
 This document contains maps and tables pertaining to the (cleaned) Mopeia trial data. It was produced mid day (GMT +2) on Monday, October 24th, 2016. It uses data sent from Charfudin Sacoor to Joe Brew on the morning of Monday, October 24th, 2016 (`Limpesa_Final__241016_For maps.xlsx`).
 
+
+In addition to the manual cleaning carried out by the demography team, approximately 2,300 houses were flagged and removed in algorithmic cleaning.
+
 ```{r}
 #### READ IN AND CLEAN UP DATA
 

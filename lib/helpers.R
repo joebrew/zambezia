@@ -161,9 +161,11 @@ leaflet_village_clean <- function(i){
                              '. Max distance: ',
                              max_d,
                              '. ',
-                             ifelse(this_spray_status,
+                             ifelse(
+                               ifelse(is.na(this_spray_status), 'No spray.',
+                                            ifelse(this_spray_status,
                                     'SPRAY.',
-                                    'No spray.'))
+                                    'No spray.'))))
       # '. ',
       # the_village_df_row$houses_with_any_children,
       # ' houses of ',
