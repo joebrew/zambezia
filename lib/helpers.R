@@ -23,7 +23,8 @@ identify_problems <- function(){
       # Go through each household in the unit and calculate distance
       # to all other units
       # distances <- gDistance(sub_census, byid = TRUE)
-      distances <- spDists(sub_census, longlat = TRUE, diagonal = FALSE)
+      # distances <- spDists(sub_census, longlat = TRUE, diagonal = FALSE)
+      distances <- geosphere::distm(sub_census, fun = distVincentySphere)
       median_distances <- apply(distances, 1, function(x){quantile(x, 0.75, na.rm = TRUE)})
       
       # Keep only the closest 50 percent
@@ -34,12 +35,13 @@ identify_problems <- function(){
                      mean(close_cluster$lat, na.rm = TRUE))
       
       # Get distance from every household to those centroids
-      distances_to_centroid <- spDistsN1(sub_census,
-                                         centroids,
-                                         longlat = TRUE)
+      distances_to_centroid <- geosphere::distm(x = sub_census, 
+                                                y = centroids,
+                                                fun = distVincentySphere)
+      
       
       # From the vector of median distances, flag those which are abnormal
-      threshold <- 6
+      threshold <- 2000
       incorrect_house_ids <- sub_census$house_number[which(distances_to_centroid > threshold)]
       # Also flag as incorrect any 1 household village ^^
       if(nrow(sub_census) == 1){
@@ -111,100 +113,107 @@ make_village_df <- function(census){
 leaflet_village_clean <- function(i){
   message(i)
   this_village_number <- village_df$village_number[i]
+  this_spray_status <- village_df$status[i]
   if(!is.na(this_village_number)){
     # Get the points only
     sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
-    sub_census_projected <- 
-      census_spatial[which(census_spatial$village_number == this_village_number),]
-    
-    # Get the border
-    border <- gConvexHull(sub_census)
-    border_projected <- gConvexHull(sub_census_projected)
-    
-    the_data <- sub_census
-    the_border <- border
-    the_border_projected <- border_projected
-    
-    # # Get internal buffer
-    # if(class(border)[[1]] != 'SpatialPoints'){
-    #   internal <- rgeos::gBuffer(the_border_projected, width = -1000)
-    #   # Make lat long
-    #   if(!is.null(class(internal)) & class(internal) != 'NULL'){
-    #     internal <- spTransform(internal, proj4string(border))
-    #   }
-    # }
-    
-    # Generate colors
-    colors <- rep('darkorange', nrow(the_data))
-    colors[the_data$buffer] <- 'blue'
-    
-    # The village number
-    the_village_number <- the_data$village_number[1]
-    
-    # The village df row
-    the_village_df_row <- village_df %>% filter(village_number == the_village_number)
-    
-    # Get the maximum distance between two houses in kilometers
-    max_d <- paste0(round(max(apply(geosphere::distm(the_data, fun = distVincentySphere), 
-                                    2, 
-                                    max, na.rm = TRUE), 
-                              na.rm = TRUE) / 1000, digits = 1), 
-                    ' K')
-    
-    #   # Legend title
-    legend_title <- paste0('Village: ',
-                           the_village_number,
-                           '. Max distance: ',
-                           max_d,
-                           '.')
-    # '. ',
-    # the_village_df_row$houses_with_any_children,
-    # ' houses of ',
-    # the_village_df_row$houses,
-    # ' have children.')
-    
-    
-    ll <- 
-      leaflet() %>%
-      # addProviderTiles("OpenStreetMap.Mapnik") %>%
-      addProviderTiles("Esri.WorldImagery") %>%
-      # addProviderTiles("CartoDB.PositronOnlyLabels") %>%
-      # addProviderTiles("Stamen.Watercolor") %>% 
-      # addProviderTiles("Stamen.TonerHybrid") %>%
-      addProviderTiles('Stamen.TonerLabels') %>%
-      addCircleMarkers(lng = the_data$lng,
-                       lat = the_data$lat,
-                       color = colors,
-                       fillColor = colors,
-                       radius = 2.5,
-                       opacity = 0,
-                       fillOpacity = 0.5,
-                       popup = paste0('Household: ', the_data$house_number, ' Village number: ',
-                                      the_data$village_number)) %>%
-      addLegend("bottomright", 
-                colors = NA,
-                labels = ' ',
-                # colors = c('darkorange', 'blue'),
-                # labels = c('Within 2km of other village', 'xxx'),
-                title = legend_title,
-                opacity = 1 )
-    
-    if(class(border)[[1]] != 'SpatialPoints'){
-      ll <-
-        ll %>%
-        addPolylines(data = the_border, color = 'black',
-                     dashArray = '1,5,5,5,')
+    if(nrow(sub_census) > 0){
+      sub_census_projected <- 
+        census_spatial[which(census_spatial$village_number == this_village_number),]
+      
+      # Get the border
+      border <- gConvexHull(sub_census)
+      border_projected <- gConvexHull(sub_census_projected)
+      
+      the_data <- sub_census
+      the_border <- border
+      the_border_projected <- border_projected
+      
+      # # Get internal buffer
+      # if(class(border)[[1]] != 'SpatialPoints'){
+      #   internal <- rgeos::gBuffer(the_border_projected, width = -1000)
+      #   # Make lat long
+      #   if(!is.null(class(internal)) & class(internal) != 'NULL'){
+      #     internal <- spTransform(internal, proj4string(border))
+      #   }
+      # }
+      
+      # Generate colors
+      colors <- rep('darkblue', nrow(the_data))
+      # colors[the_data$buffer] <- 'blue'
+      
+      # The village number
+      the_village_number <- the_data$village_number[1]
+      
+      # The village df row
+      the_village_df_row <- village_df %>% filter(village_number == the_village_number)
+      
+      # Get the maximum distance between two houses in kilometers
+      max_d <- paste0(round(max(apply(geosphere::distm(the_data, fun = distVincentySphere), 
+                                      2, 
+                                      max, na.rm = TRUE), 
+                                na.rm = TRUE) / 1000, digits = 1), 
+                      ' K')
+      
+      #   # Legend title
+      legend_title <- paste0('Village: ',
+                             the_village_number,
+                             '. Max distance: ',
+                             max_d,
+                             '. ',
+                             ifelse(this_spray_status,
+                                    'SPRAY.',
+                                    'No spray.'))
+      # '. ',
+      # the_village_df_row$houses_with_any_children,
+      # ' houses of ',
+      # the_village_df_row$houses,
+      # ' have children.')
+      
+      
+      ll <- 
+        leaflet() %>%
+        # addProviderTiles("OpenStreetMap.Mapnik") %>%
+        addProviderTiles("Esri.WorldImagery") %>%
+        # addProviderTiles("CartoDB.PositronOnlyLabels") %>%
+        # addProviderTiles("Stamen.Watercolor") %>% 
+        # addProviderTiles("Stamen.TonerHybrid") %>%
+        addProviderTiles('Stamen.TonerLabels') %>%
+        addCircleMarkers(lng = the_data$lng,
+                         lat = the_data$lat,
+                         color = colors,
+                         fillColor = colors,
+                         radius = 2.5,
+                         opacity = 0,
+                         fillOpacity = 0.5,
+                         popup = paste0('Household: ', the_data$house_number, ' Village number: ',
+                                        the_data$village_number)) %>%
+        addLegend("bottomright", 
+                  colors = NA,
+                  labels = ' ',
+                  # colors = c('darkorange', 'blue'),
+                  # labels = c('Within 2km of other village', 'xxx'),
+                  title = legend_title,
+                  opacity = 1 )
+      
+      if(!class(border)[[1]] %in% c('SpatialPoints', 'NULL')){
+        ll <-
+          ll %>%
+          addPolylines(data = the_border, color = 'black',
+                       dashArray = '1,5,5,5,')
+      }
+      # # BUFFER
+      # if(!is.null(class(internal))){
+      #   ll <- 
+      #     ll %>%
+      #     addPolylines(data = internal,
+      #                  color = 'grey',
+      #                  dashArray = '1,5')
+      # }
+      return(ll)
     }
-    # # BUFFER
-    # if(!is.null(class(internal))){
-    #   ll <- 
-    #     ll %>%
-    #     addPolylines(data = internal,
-    #                  color = 'grey',
-    #                  dashArray = '1,5')
-    # }
-    return(ll)
   }
+  
 }
 
 
@@ -215,60 +224,63 @@ leaflet_village <- function(i){
   if(!is.na(this_village_number)){
     # Get the points only
     sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
-    # Get the border
-    border <- gConvexHull(sub_census)
-    
-    the_data <- sub_census
-    the_border <- border
-    
-    # Generate colors
-    colors <- rep('blue', nrow(the_data))
-    colors[the_data$house_number %in% incorrect_houses] <- 'red'
-    
-    # The village number
-    the_village_number <- the_data$village_number[1]
-    
-    # The village df row
-    the_village_df_row <- village_df %>% filter(village_number == the_village_number)
-    
-    #   # Legend title
-    legend_title <- paste0('Village: ',
-                           the_village_number,
-                           '. ',
-                           ifelse(the_village_df_row$problems,
-                                  paste0(the_village_df_row$n_incorrect_houses, ' casas suspeitas', collapse = ''),
-                                  'Nao ha problemas'))
-    
-    
-    ll <- 
-      leaflet() %>%
-      addProviderTiles("OpenStreetMap.Mapnik") %>%
-      addCircleMarkers(lng = the_data$lng,
-                       lat = the_data$lat,
-                       color = colors,
-                       fillColor = colors,
-                       radius = 2.5,
-                       opacity = 0,
-                       fillOpacity = 0.5,
-                       popup = paste0('Household: ', the_data$house_number, ' Village number: ',
-                                      the_data$village_number)) %>%
-      addLegend("bottomright", 
-                colors = c('red', 'blue'),
-                labels = c(paste0('Suspected: ',
-                                  the_village_df_row$n_incorrect_houses), 
-                           paste0('Okay: ',
-                                  the_village_df_row$houses - the_village_df_row$n_incorrect_houses)),
-                title = legend_title,
-                opacity = 1 )
-    
-    if(class(border)[[1]] != 'SpatialPoints'){
-      ll <-
-        ll %>%
-        addPolylines(data = the_border, color = 'black',
-                     dashArray = '1,5')
+    if(nrow(sub_census) > 0){
+      # Get the border
+      border <- gConvexHull(sub_census)
+      
+      the_data <- sub_census
+      the_border <- border
+      
+      # Generate colors
+      colors <- rep('blue', nrow(the_data))
+      colors[the_data$house_number %in% incorrect_houses] <- 'red'
+      
+      # The village number
+      the_village_number <- the_data$village_number[1]
+      
+      # The village df row
+      the_village_df_row <- village_df %>% filter(village_number == the_village_number)
+      
+      #   # Legend title
+      legend_title <- paste0('Village: ',
+                             the_village_number,
+                             '. ',
+                             ifelse(the_village_df_row$problems,
+                                    paste0(the_village_df_row$n_incorrect_houses, ' casas suspeitas', collapse = ''),
+                                    'Nao ha problemas'))
+      
+      
+      ll <- 
+        leaflet() %>%
+        addProviderTiles("OpenStreetMap.Mapnik") %>%
+        addCircleMarkers(lng = the_data$lng,
+                         lat = the_data$lat,
+                         color = colors,
+                         fillColor = colors,
+                         radius = 2.5,
+                         opacity = 0,
+                         fillOpacity = 0.5,
+                         popup = paste0('Household: ', the_data$house_number, ' Village number: ',
+                                        the_data$village_number)) %>%
+        addLegend("bottomright", 
+                  colors = c('red', 'blue'),
+                  labels = c(paste0('Suspected: ',
+                                    the_village_df_row$n_incorrect_houses), 
+                             paste0('Okay: ',
+                                    the_village_df_row$houses - the_village_df_row$n_incorrect_houses)),
+                  title = legend_title,
+                  opacity = 1 )
+      
+      if(!class(border)[[1]] %in% c('SpatialPoints', 'NULL')){
+        ll <-
+          ll %>%
+          addPolylines(data = the_border, color = 'black',
+                       dashArray = '1,5')
+      }
+      return(ll)
     }
-    return(ll)
-  }
+  } 
+  
   
 }
 
@@ -279,7 +291,7 @@ identify_buffers <-
     require(geosphere)
     # Get distances between all houses
     message('Calculating distances for everyone')
-    spatial_ll_census$within_2k_not_village <- NA
+    spatial_ll_census$within_1k_not_village <- NA
     distances <- geosphere::distm(spatial_ll_census, fun = distVincentySphere)
     message(paste0('Done calculating distances : ', Sys.time()))
     # Sub function to go through each row, identify which are in the same village
@@ -288,13 +300,12 @@ identify_buffers <-
       this_village <- spatial_ll_census$village_number[i]
       these_distances <- distances[i,]
       # Remove other points in the village
-      these_distances <- these_distances[spatial_ll_census$village_final != this_village]
-      # See if there are any remaining less than 2k
-      sub2 <- these_distances < 2000
-      x <- any(sub2, na.rm = TRUE)
-      message(x)
+      these_distances <- these_distances[spatial_ll_census$village_number != this_village]
+      # See if there are any remaining less than 1k
+      sub1 <- these_distances < 1000
+      x <- any(sub1, na.rm = TRUE)
       spatial_ll_census$buffer[i] <- x
-      spatial_ll_census$within_2k_not_village <- length(which(sub2))
+      spatial_ll_census$within_1k_not_village[i] <- length(which(sub1))
     }
     return(spatial_ll_census)
   }
@@ -330,67 +341,70 @@ master_map <- function(){
     if(!is.na(this_village_number)){
       # Get the points only
       sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
-      sub_census_projected <- 
-        census_spatial[which(census_spatial$village_number == this_village_number),]
+      if(nrow(sub_census) > 0){
+        sub_census_projected <- 
+          census_spatial[which(census_spatial$village_number == this_village_number),]
+        
+        # Get the border
+        border <- gConvexHull(sub_census)
+        border_projected <- gConvexHull(sub_census_projected)
+        
+        the_data <- sub_census
+        the_border <- border
+        the_border_projected <- border_projected
+        
+        # Get centroid
+        centroids <- c(mean(the_data$lng, na.rm = TRUE),
+                       mean(the_data$lat, na.rm = TRUE))
+        
+        # # Get internal buffer
+        # if(!class(border)[[1]] %in% c('SpatialPoints', 'NULL')){
+        #   internal <- rgeos::gBuffer(the_border_projected, width = -1000)
+        #   # Make lat long
+        #   if(!is.null(class(internal)) & class(internal) != 'NULL'){
+        #     internal <- spTransform(internal, proj4string(border))
+        #   }
+        # }
+        
+        # The village number
+        the_village_number <- the_data$village_number[1]
+        
+        # The village df row
+        the_village_df_row <- village_df %>% filter(village_number == the_village_number)
+        
+        # Get the maximum distance between two houses in kilometers
+        max_d <- max(apply(geosphere::distm(the_data, fun = distVincentySphere), 
+                           2, 
+                           max, na.rm = TRUE), 
+                     na.rm = TRUE) / 1000
+        
+        # Plot the border
+        plot(the_border,
+             col = adjustcolor(this_color, alpha.f = 0.2), 
+             add = TRUE,
+             border = adjustcolor(this_color, alpha.f = 0.6),
+             lty = 2)
+        
+        # Plot the points
+        points(the_data,
+               col = adjustcolor(this_color, alpha.f = 0.5),
+               pch = 3,
+               cex = 0.6)
+        
+        # Plot the centroid
+        text(centroids[1],
+             centroids[2],
+             cex = ceiling(max_d / 25),
+             labels = this_village_number,
+             col = adjustcolor(this_color, alpha.f = 0.7))
+        
+        # # Add labels
+        # text(the_data,
+        #      labels = the_data$house_number,
+        #      col = adjustcolor('black', alpha.f = 0.3),
+        #      cex = 0.2)
+      }
       
-      # Get the border
-      border <- gConvexHull(sub_census)
-      border_projected <- gConvexHull(sub_census_projected)
-      
-      the_data <- sub_census
-      the_border <- border
-      the_border_projected <- border_projected
-      
-      # Get centroid
-      centroids <- c(mean(the_data$lng, na.rm = TRUE),
-                     mean(the_data$lat, na.rm = TRUE))
-      
-      # # Get internal buffer
-      # if(class(border)[[1]] != 'SpatialPoints'){
-      #   internal <- rgeos::gBuffer(the_border_projected, width = -1000)
-      #   # Make lat long
-      #   if(!is.null(class(internal)) & class(internal) != 'NULL'){
-      #     internal <- spTransform(internal, proj4string(border))
-      #   }
-      # }
-      
-      # The village number
-      the_village_number <- the_data$village_number[1]
-      
-      # The village df row
-      the_village_df_row <- village_df %>% filter(village_number == the_village_number)
-      
-      # Get the maximum distance between two houses in kilometers
-      max_d <- max(apply(geosphere::distm(the_data, fun = distVincentySphere), 
-                         2, 
-                         max, na.rm = TRUE), 
-                   na.rm = TRUE) / 1000
-      
-      # Plot the border
-      plot(the_border,
-           col = adjustcolor(this_color, alpha.f = 0.2), 
-           add = TRUE,
-           border = adjustcolor(this_color, alpha.f = 0.6),
-           lty = 2)
-      
-      # Plot the points
-      points(the_data,
-             col = adjustcolor(this_color, alpha.f = 0.5),
-             pch = 3,
-             cex = 0.6)
-      
-      # Plot the centroid
-      text(centroids[1],
-           centroids[2],
-           cex = ceiling(max_d / 25),
-           labels = this_village_number,
-           col = adjustcolor(this_color, alpha.f = 0.7))
-      
-      # # Add labels
-      # text(the_data,
-      #      labels = the_data$house_number,
-      #      col = adjustcolor('black', alpha.f = 0.3),
-      #      cex = 0.2)
     }
     
   }
@@ -432,25 +446,28 @@ leaflet_village_master <- function(){
     if(!is.na(this_village_number)){
       # Get the points only
       sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
-      sub_census_projected <- 
-        census_spatial[which(census_spatial$village_number == this_village_number),]
-      
-      # Get the border
-      border <- gConvexHull(sub_census)
-      
-      the_border <- border
-      
-      if(class(border)[[1]] != 'SpatialPoints'){
-        this_color <- village_colors$color[i]
-        ll <-
-          ll %>%
-          addPolylines(data = the_border, color = this_color,
-                       # dashArray = '1,5',
-                       opacity = 0.6,
-                       popup = village_df$village_number[i]) %>%
-          addPolygons(data = the_border,
-                      color = this_color,
-                      popup = village_df$village_number[i])
+      if(nrow(sub_census) > 0){
+        sub_census_projected <- 
+          census_spatial[which(census_spatial$village_number == this_village_number),]
+        
+        # Get the border
+        border <- gConvexHull(sub_census)
+        
+        the_border <- border
+        
+        if(class(border)[[1]] != 'SpatialPoints'){
+          this_color <- village_colors$color[i]
+          ll <-
+            ll %>%
+            addPolylines(data = the_border, color = this_color,
+                         # dashArray = '1,5',
+                         opacity = 0.6,
+                         popup = village_df$village_number[i]) %>%
+            addPolygons(data = the_border,
+                        color = this_color,
+                        popup = village_df$village_number[i])
+        }
+        
       }
     }
   }

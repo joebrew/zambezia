@@ -1,13 +1,15 @@
 ---
-title: Clean maps
-author: CISM
-fig_height: 2.6
+title: "Clean maps"
+author: "CISM"
 fig_width: 4
 output:
   html_document:
-    toc: true
-    toc_float: true
     theme: yeti
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+fig_height: 2.6
 ---
 ```{r, echo = FALSE, warning = FALSE, message = FALSE, comment = NA, error= FALSE, cache = FALSE}
 # No scientific notation
@@ -124,6 +126,11 @@ if('temp.RData' %in% dir()){
   # Identify problems
   identify_problems()
   
+  # Remove incorrect houses
+  census <- census[which(!census$house_number %in% incorrect_houses),]
+  census_spatial <- census_spatial[which(!census_spatial$house_number %in% incorrect_houses),]
+  census_spatial_ll <- census_spatial_ll[which(!census_spatial_ll$house_number %in% incorrect_houses),]
+
   # Identify buffers
   Sys.time()
   census_spatial_ll <- identify_buffers(census_spatial_ll)
@@ -131,6 +138,43 @@ if('temp.RData' %in% dir()){
   save.image('temp.RData')  
 }
 
+
+# Resource helpers
+source('lib/helpers.R')
+
+# Get spray status
+# spray_status <- read_excel('20160817 Mopeia spray-no spray random list.xlsx')
+spray_status <- read_excel('Final spray no spray list.xlsx')
+
+# Clean up
+spray_status <- spray_status[,1:11]
+names(spray_status) <-
+  tolower(gsub('.', '_', names(spray_status), fixed = TRUE))
+names(spray_status) <- gsub(' |-', '_', names(spray_status))
+
+# Remove NA rows
+spray_status <- 
+  spray_status %>%
+  filter(!is.na(cluster))
+
+# Create a status column
+spray_status$status <- spray_status$spray_status
+spray_status$status <-
+  ifelse(is.na(spray_status$status),
+         FALSE,
+         ifelse(spray_status$status == 'YES',
+                TRUE,
+                NA))
+spray_status$spray_status <- NULL
+
+# Get village-specific spray status
+village_df$status <- NA
+for (i in 1:nrow(spray_status)){
+  this_cluster <- spray_status$cluster[i]
+  this_spray_status <- spray_status$status[i]
+  these_villages <- unlist(lapply(strsplit(spray_status$village_code[i], split = ','), as.numeric))
+  village_df$status[village_df$village_number %in% these_villages] <- this_spray_status
+}
 ```
 
 # Village-specific maps
