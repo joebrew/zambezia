@@ -83,6 +83,18 @@ census$administrative_post <- census$administrative_post_final
 census$house_number <- census$houseno_Final_1
 census$locality <- census$locality_Final
 
+
+# Remove all NA rows
+census <- census %>%
+  filter(!is.na(lng),
+         !is.na(lat),
+         !is.na(village_number),
+         !is.na(house_number))
+
+
+# Save old version of census
+census_old <- census
+
 # Create a spatial version of census
 census_spatial <- census
 coordinates(census_spatial) <- ~x+y
@@ -126,27 +138,51 @@ if('temp.RData' %in% dir()){
   # Make a dataframe of just villages (with cluster assignments)
   village_df <- make_village_df(census = census)
   
+  # Get a distance matrix (takes 2-3 minutes)
+  distance_matrix <- get_distance_matrix(spatial_ll_census = census_spatial_ll)
+  
   # Identify problems
   identify_problems()
+  census$problematic <- census$house_number %in% incorrect_houses
+  census_spatial$problematic <- census_spatial$house_number %in% incorrect_houses
+  census_spatial_ll$problematic <- census_spatial_ll$house_number %in% incorrect_houses
+  
+  # SUBSET TO REMOVE PROBLEMATIC
+  # Get distance matrix after subset
+  distance_matrix_old <- distance_matrix
+  distance_matrix <- distance_matrix[!census$problematic,
+                                         !census$problematic]
+  
+  # Identify the nearest neighbors of each house
+  nn <- nearest_neighbor(census_spatial_ll = census_spatial_ll,
+                             distance_matrix_old = distance_matrix_old,
+                             n = 5)
+  census$nearest_neighbors <- nn
+  census_old$nearest_neighbors <- nn
+  census_spatial$nearest_neighbors <- nn
+  census_spatial_ll$nearest_neighbors <- nn
   
   # Remove incorrect houses
   census <- census[which(!census$house_number %in% incorrect_houses),]
   census_spatial <- census_spatial[which(!census_spatial$house_number %in% incorrect_houses),]
   census_spatial_ll <- census_spatial_ll[which(!census_spatial_ll$house_number %in% incorrect_houses),]
-
+  
   # Identify buffers
   Sys.time()
-  census_spatial_ll <- identify_buffers(census_spatial_ll)
+  census_spatial_ll <- identify_buffers(spatial_ll_census = census_spatial_ll,
+                       distances = distance_matrix)
+  census_spatial$within_1k_not_village <- census_spatial_ll$within_1k_not_village
+  census_spatial$buffer <- census_spatial_ll$buffer
+  census$within_1k_not_village <- census_spatial_ll$within_1k_not_village
+  census$buffer <- census_spatial_ll$buffer
   Sys.time()
   save.image('temp.RData')  
 }
-
 
 # Resource helpers
 source('lib/helpers.R')
 
 # Get spray status
-# spray_status <- read_excel('20160817 Mopeia spray-no spray random list.xlsx')
 spray_status <- read_excel('Final spray no spray list.xlsx')
 
 # Clean up
@@ -178,6 +214,23 @@ for (i in 1:nrow(spray_status)){
   these_villages <- unlist(lapply(strsplit(spray_status$village_code[i], split = ','), as.numeric))
   village_df$status[village_df$village_number %in% these_villages] <- this_spray_status
 }
+
+# Get table for Edgar, requested 25 Oct
+edgar <-
+  left_join(x = census_old,
+            y = census %>%
+              filter(!duplicated(house_number)) %>%
+              mutate(problematic = FALSE) %>%
+              dplyr::select(house_number, problematic),
+            by = 'house_number') %>%
+  mutate(problematic = ifelse(is.na(problematic), TRUE, problematic)) %>%
+  arrange(desc(problematic))
+edgar <- edgar[,unique(c('house_number', 
+                         'village_number', 
+                         'problematic', 
+                         'nearest_neighbors', 
+                         names(edgar)))]
+write_csv(edgar, '~/Desktop/edgar_with_neighbors.csv')
 ```
 
 # Village-specific maps

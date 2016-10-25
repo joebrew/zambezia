@@ -289,12 +289,12 @@ leaflet_village <- function(i){
 # Function to identify points which are within 2km of a point
 # OUTSIDE of the village; in other words, remove those that might be problematic
 identify_buffers <- 
-  function(spatial_ll_census = census_spatial_ll){
+  function(spatial_ll_census = census_spatial_ll,
+           distances = distance_matrix){
     require(geosphere)
     # Get distances between all houses
     message('Calculating distances for everyone')
     spatial_ll_census$within_1k_not_village <- NA
-    distances <- geosphere::distm(spatial_ll_census, fun = distVincentySphere)
     message(paste0('Done calculating distances : ', Sys.time()))
     # Sub function to go through each row, identify which are in the same village
     for (i in 1:nrow(spatial_ll_census)){
@@ -489,4 +489,36 @@ leaflet_village_master <- function(){
   
   
   return(ll)
+}
+
+# Get distance matrix
+get_distance_matrix <- function(spatial_ll_census = census_spatial_ll){
+  distances <- geosphere::distm(spatial_ll_census, fun = distVincentySphere)
+  return(distances)
+}
+
+# Get the nearest neighbor of villages that aren't this village
+nearest_neighbor <- function(census_spatial_ll = census_spatial_ll,
+                             distance_matrix_old = distance_matrix_old,
+                             n = 5){
+  nn <- rep(NA, nrow(census_spatial_ll))
+  for (i in 1:nrow(census_spatial_ll)){
+    message(i)
+    this_village <- census_spatial_ll$village_number[i]
+    the_distances <- distance_matrix_old[i,]
+    # Make a dataframe of villages and distances
+    x <- data_frame(village_number = census_spatial_ll$village_number,
+                    meters = the_distances) %>%
+      group_by(village_number) %>%
+      summarise(low = min(meters, na.rm = TRUE),
+                mid = median(meters, na.rm = TRUE),
+                avg = mean(meters, na.rm = TRUE)) %>%
+      filter(village_number != this_village) %>%
+      arrange(low)
+    # Get the  nearest
+    the_nearest <- x$village_number[1:n]
+    # Paste together and return
+    nn[i] <- paste0(the_nearest, collapse = ';')
+  }
+  return(nn)
 }
