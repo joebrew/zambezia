@@ -1,0 +1,477 @@
+---
+title: "Maps with buffers"
+author: "Orvahlo Augusto, Joe Brew, Carlos Chaccour, Edgar Jamisse, Charfudin Sacoor, Francisco Saute"
+fig_width: 4
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+fig_height: 2.6
+---
+```{r, echo = FALSE, warning = FALSE, message = FALSE, comment = NA, error= FALSE, cache = FALSE}
+# No scientific notation
+options(scipen=999)
+
+# Packages 
+library(xtable)
+library(knitr)
+library(ggplot2) 
+# library(dplyr)
+library(rgeos)
+library(RColorBrewer)
+library(Rmisc)
+# Libraries
+library(rgdal)
+library(raster)
+library(sp)
+library(leaflet)
+library(ggmap)
+library(readxl)
+library(dplyr)
+library(readr)
+library(geosphere)
+
+# Basic knitr options
+opts_chunk$set(comment = NA, 
+               echo = FALSE, 
+               warning = FALSE, 
+               message = FALSE, 
+               error = TRUE, # Render report, even with errors
+               cache = F)
+
+# Helpers
+source('lib/get_zambezia.R')
+source('lib/helpers.R')
+```
+
+```{r setup, include=FALSE, echo = FALSE}
+library(knitr)
+knit_engines$set(asis = function(options) {
+  if (options$echo && options$eval) knit_child(text = options$code)
+})
+```
+
+
+```{r}
+#### READ IN AND CLEAN UP DATA
+
+# Read in final dataset, as given by Orvahlo on October 24, 2016
+census <- read_excel('Limpesa_Final__241016_For maps.xlsx')
+
+# Get more nicely named geographic coordinate column names
+census$lat <- census$y <- census$latitude <- census$gpc_lat
+census$lon <- census$lng <- census$longitude <-census$x <- census$gpc_lng
+
+# Get a shapefile for Mozambique
+moz <- raster::getData('GADM', country = 'MOZ', level = 3)
+moz2 <- raster::getData('GADM', country = 'MOZ', level = 2)
+
+# GET CORRECT FINAL COLUMNS, AS EXPLAINED IN EMAIL
+# Get a village number
+census$village_number <- census$`village number_final`
+census$administrative_post <- census$administrative_post_final
+census$house_number <- census$houseno_Final_1
+census$locality <- census$locality_Final
+
+
+# Remove all NA rows
+census <- census %>%
+  filter(!is.na(lng),
+         !is.na(lat),
+         !is.na(village_number),
+         !is.na(house_number))
+
+
+# Save old version of census
+census_old <- census
+
+# Create a spatial version of census
+census_spatial <- census
+coordinates(census_spatial) <- ~x+y
+proj4string(census_spatial) <- proj4string(moz)
+
+# Subset the shapefile just to Zambezia
+zam <- moz[moz@data$NAME_1 == 'Zambezia',]
+
+# Subset further to just Mopeia
+mop <- moz2[moz2@data$NAME_2 == 'Mopeia',]
+
+# Save the original proj4string
+original_proj4string <- proj4string(moz)
+
+# Prepare ggmap-compatible objects
+zam_fortified <- fortify(zam, id = ID_3)
+mop_fortified <- fortify(mop, id = ID_3)
+zam_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+                               lat = mean(census$lat, na.rm = TRUE)),
+                  maptype = 'satellite')
+mop_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+                               lat = mean(census$lat, na.rm = TRUE)),
+                  maptype = 'satellite')
+
+# Switch to a projected format
+# Project
+census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
+mop <- spTransform(mop, CRS("+init=epsg:3347"))
+# Later, we can switch back to lat/long:
+census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
+mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
+# proj4string(mop_ll) <- proj4string(zam)
+```
+
+
+
+```{r}
+if('clean_maps_with_buffers_data.RData' %in% dir()){
+  load('clean_maps_with_buffers_data.RData')
+} else {
+  # Make a dataframe of just villages (with cluster assignments)
+  village_df <- make_village_df(census = census)
+  
+  # Get a distance matrix (takes 2-3 minutes)
+  distance_matrix <- get_distance_matrix(spatial_ll_census = census_spatial_ll)
+  
+  # Identify problems
+  identify_problems()
+  census$problematic <- census$house_number %in% incorrect_houses
+  census_spatial$problematic <- census_spatial$house_number %in% incorrect_houses
+  census_spatial_ll$problematic <- census_spatial_ll$house_number %in% incorrect_houses
+  
+  # SUBSET TO REMOVE PROBLEMATIC
+  # Get distance matrix after subset
+  distance_matrix_old <- distance_matrix
+  distance_matrix <- distance_matrix[!census$problematic,
+                                         !census$problematic]
+  
+  # Identify the nearest neighbors of each house
+  nn <- nearest_neighbor(census_spatial_ll = census_spatial_ll,
+                             distance_matrix_old = distance_matrix_old,
+                             n = 5)
+  census$nearest_neighbors <- nn
+  census_old$nearest_neighbors <- nn
+  census_spatial$nearest_neighbors <- nn
+  census_spatial_ll$nearest_neighbors <- nn
+  
+  # Remove incorrect houses
+  census <- census[which(!census$house_number %in% incorrect_houses),]
+  census_spatial <- census_spatial[which(!census_spatial$house_number %in% incorrect_houses),]
+  census_spatial_ll <- census_spatial_ll[which(!census_spatial_ll$house_number %in% incorrect_houses),]
+  
+  # Get the voronoi tesselation surface
+  vv <- voronoi(spatial_census_ll = census_spatial_ll)
+  # Get a non lat long version of voronoi surface
+  proj4string(vv) <- proj4string(census_spatial_ll)
+  vv_ll <- vv
+  vv <- sp::spTransform(vv, CRSobj = proj4string(census_spatial))
+    
+  # Get the buffered voronoi tesselation surface
+  vvb <- rgeos::gBuffer(vv, 
+                        byid = TRUE, 
+                        id = vv$village_number,
+                        width = -1000)
+  
+  # Convert back to lat lon
+  vvb_ll <- spTransform(vvb, CRSobj = proj4string(census_spatial_ll))
+  
+  # Identify buffers voronoi
+  census_spatial_ll <- 
+    identify_buffers_voronoi(
+    census_spatial_ll = census_spatial_ll,
+           distance_matrix = distance_matrix,
+           vvb_ll = vvb_ll)
+  
+  # Get buffers through distance to other villages
+  census_spatial_ll <- identify_buffers(spatial_ll_census = census_spatial_ll,
+                       distances = distance_matrix)
+  
+  # Update other objects with variables only in census_spatial_ll
+  update_other_objects()
+
+  # Save
+  save.image('clean_maps_with_buffers_data.RData')  
+}
+
+
+# Resource helpers
+source('lib/helpers.R')
+
+# Get spray status
+get_spray_status()
+village_df <- village_df %>% filter(!is.na(village_number),
+                                    !duplicated(village_number))
+
+# Join spray status to objects
+joiner <- 
+  village_df %>%
+              dplyr::select(village_number, cluster, status)
+census_spatial_ll@data <-
+  left_join(census_spatial_ll@data,
+            joiner,
+            by = 'village_number')
+census_spatial@data <-
+  left_join(census_spatial@data,
+            joiner,
+            by = 'village_number')
+census <-
+  left_join(census,
+            joiner,
+            by = 'village_number')
+```
+
+
+# Introduction
+
+This document contains maps and tables pertaining to the (cleaned) Mopeia trial data. Its purpose is to explain the methods used for buffering, as well as provide visualizations and tables useful for the designation of spray / no-spray zones and study participant selection. 
+
+It was produced late afternoon (GMT +2) on Friday, October 28th, 2016. It uses data sent from Charfudin Sacoor to Joe Brew on the morning of Monday, October 24th, 2016 (`Limpesa_Final__241016_For maps.xlsx`).
+
+# Methods
+
+## Algorithmic removals
+
+In addition to the manual cleaning carried out by the demography team, `r nrow(census_old) - nrow(census)` houses were flagged and removed in algorithmic cleaning. Houses were removed when suspected of being misclassified into the wrong village. The criteria for being of "suspicion" is somewhat complicated, but can be visualized in full here: https://github.com/joebrew/zambezia/blob/master/lib/helpers.R
+
+## Buffering
+
+The purpose of buffering is to flag areas which are too close to other villages to be suitable (due to the possibility of contamination). Per the protocol, there should be a 2 kilometer buffer between villages. In other words, any villager living within 1 kilometer of the _edge_ of his or her village is part of the buffer zone.
+
+However, taking the above approach is too restrictive and it results in too great of data loss. There are many cases in which a villager may live within 1 kilometer of his or her village's edge (ie, in the "buffer"), but is still many kilometers from any other villager from another village. In these cases, there is no possibility of "contamination", so flagging that villager as in the "buffer" doesn't make sense.
+
+In order to account for this issue, we construct delaunay triangles and subsequently create voronoi polygons from all villagers location. In short, this has the effect of "expanding" each village's boundary so that it encompasses not only those points in which the villagers live, but also any point which is closer to that village than any other.
+
+### An example
+
+Take village 7169, for example ('Mugurrumba'). In the below map, red points are villagers from Mugurrumba, whereas black points are residents of other villages.
+
+```{r}
+# Example
+example_village <- census_spatial_ll[census_spatial_ll$village_number == 7169,]
+others <- census_spatial_ll[census_spatial_ll$village_number != 7169,]
+
+plot(example_village,
+     main = 'Village 7169 (Mugurrumba)',
+     col = adjustcolor('darkred', alpha.f = 0.6),
+     pch = 1)
+points(others, 
+       col = adjustcolor('black', alpha.f = 0.5), 
+       add = TRUE)
+```
+
+If we draw a "precise" literal border around Mugurrumba, it looks like this:
+
+```{r}
+plot(example_village,
+     main = 'Village 7169 (Mugurrumba) with border',
+     col = adjustcolor('darkred', alpha.f = 0.6),
+     pch = 1)
+points(others, 
+       col = adjustcolor('black', alpha.f = 0.5), 
+       add = TRUE)
+x <- gConvexHull(example_village)
+plot(x, 
+     col = adjustcolor('darkred', alpha.f = 0.6),
+     add = TRUE)
+```
+
+Note how almost all of the residents of Mugurrumba live very close (or directly on) the border
+
+Mugurrumba is so small that it is impossible to create an _interior_ 1 kilometer buffer. In other words, _ALL_ Mugurrumba residents would be considered part of the buffer.
+
+So, what we can do is expand Mugurrumba's "border" further out so that it includes _any_ geospatial point which is closer to Mugurrumba than any other village. This is called "voronoi tesselation", and is commonly used in geospatial applications.
+
+```{r}
+plot(example_village,
+     main = 'Village 7169 (Mugurrumba) with voronoi border',
+     col = adjustcolor('darkred', alpha.f = 0.6),
+     pch = 1)
+points(others, 
+       col = adjustcolor('black', alpha.f = 0.5), 
+       add = TRUE)
+plot(vv_ll[vv_ll$village_number == 7169,], 
+     add = T,
+     col = adjustcolor('darkred', alpha.f = 0.6))
+```
+
+Now, with our "expanded" (voronoi tesselation tile) border, we can then re-draw our 1 kilometer interior border:
+
+```{r}
+plot(example_village,
+     main = 'Village 7169 (Mugurrumba) with voronoi buffer',
+     col = adjustcolor('darkred', alpha.f = 0.6),
+     pch = 1)
+points(others, 
+       col = adjustcolor('black', alpha.f = 0.5), 
+       add = TRUE)
+plot(vv_ll[vv_ll$village_number == 7169,], 
+     add = T,
+     col = adjustcolor('black', alpha.f = 0.2),
+     angle = 45,
+     density = 20)
+plot(vvb_ll[vvb_ll$village_number == 7169,], 
+     add = T,
+     col = adjustcolor('darkred', alpha.f = 0.6))
+```
+
+As can be seen in the above map, some villagers (red points outside of the red zone) are in the buffer, but many villagers (those that are not near to other villages) are not.
+
+When we apply voronoi tesselation to the entire province of Mopeia, we _de facto_ classify every inch of territory as part of a village, even if nobody lives there. In other words, any part of Mopeia is considered part of the village which is nearest. The below map shows the entirety of the voronoi surface:
+
+```{r}
+cols <- colorRampPalette(brewer.pal(9, 'Spectral'))(nrow(vv_ll))
+cols <- sample(cols, length(cols))
+cols <- adjustcolor(cols, alpha.f = 0.9)
+plot(mop_ll)
+plot(vv_ll, col = cols,add = TRUE, border = adjustcolor('black', alpha.f = 0.5))
+plot(mop_ll, add = TRUE)
+```
+
+We can apply our veronoi internal buffers and we get the following:
+
+```{r}
+cols <- colorRampPalette(brewer.pal(9, 'Spectral'))(nrow(vvb_ll))
+cols <- sample(cols, length(cols))
+cols <- adjustcolor(cols, alpha.f = 0.9)
+plot(mop_ll)
+plot(vvb_ll, col = cols,add = TRUE, border = adjustcolor('black', alpha.f = 0.5))
+plot(mop_ll, add = TRUE)
+```
+
+And finally, we can add the location of each household to see which households fall into buffer zones and which don't.
+
+```{r}
+color_df <- data_frame(village_number = vvb_ll$village_number,
+                       col = cols)
+the_points <- census_spatial_ll 
+the_points@data <- the_points@data %>%
+  left_join(color_df,
+            by = 'village_number')
+
+plot(mop_ll)
+plot(vvb_ll, col = adjustcolor(cols, alpha.f = 0.3),add = TRUE, border = adjustcolor('black', alpha.f = 0.5))
+plot(mop_ll, add = TRUE)
+points(the_points,
+       col = adjustcolor(the_points@data$col, alpha.f = 0.5),
+       pch = 3,
+       cex = 0.5)
+```
+
+Using this method, approximately half of our households are not within buffer zones. 
+
+```{r}
+ggplot(data = census_spatial_ll@data,
+       aes(x = ifelse(within_1k_voronoi_buffer, 'In buffer', 'Usable'))) +
+  geom_bar(alpha = 0.6) +
+  xlab('Status') +
+  ylab('Households') +
+  ggtitle('Location status of households') +
+  theme_bw()
+```
+
+### Issues with the voronoi approach
+
+The voronoi approach is the best of all options. It captures as many households as possible, while eliminating those that are too close to other villages to be useful. 
+
+For example, for the 173 residents of the village of Ntada, they are all within the core area.
+
+```{r}
+leaflet_village_clean_with_voronoi_buffer(1)
+```
+
+For the 166 villagers of Bone, 152 are in the core (and 14 are in the buffer).
+
+```{r}
+leaflet_village_clean_with_voronoi_buffer(2)
+```
+
+However, for some villages (like Eduardo Mondlane), the households are so close to other villages that _none_ of the households are considered "core".
+
+```{r}
+leaflet_village_clean_with_voronoi_buffer(4)
+```
+
+### Potential remediations
+
+One potential work-around is to do all boundary-creation (delaunay triangulation and voronoi tesselation) at the level of the "cluster" rather than the "village" (bairro). This way, there would be fewer buffers, and there would be no buffers between villages of identical spray status.
+
+Another alternative would be to essentially designate only two clusters: spray and no-spray. The only buffers created, in this strategy, would be between spray and no-spray zones. Between clusters and villages of identical spray status, no buffer zones would be created.
+
+
+### Code 
+
+Full code for the generation of delaunay triangles and voronoi tesselation is available at https://github.com/joebrew/zambezia.
+
+
+
+```{r, eval = FALSE}
+# VILLAGE SPECIFIC MAPS - NOT EVALUATING
+
+maps <- lapply(village_df$row_number, function(x){
+  leaflet_village_clean_with_voronoi_buffer(x)
+})
+
+htmltools::tagList(maps)
+```
+
+
+# Master map
+
+The below map shows all households, except for the `r nrow(census_old) - nrow(census)` households algorithmically removed due to suspicion of error. Each village's core area is denoted by the solid line of the color of that village's points. Each village's "strict" border is denoted by a grey polygon. Each point (household) is clickable; upon click, the household number, village number, core/buffer status and spray status are shown. 
+
+```{r, eval = TRUE}
+leaflet_village_master_voronoi_buffer()
+```
+
+
+```{r, eval = FALSE}
+# Also create a master map
+master_map()
+```
+
+# Master table
+
+The below table contains _all_ households, along with the relevant information pertaining to spray status, buffer/core status, etc.
+
+```{r}
+village_names <- 
+  census %>%
+  group_by(village_number, local_village_name) %>%
+  tally %>%
+  ungroup %>%
+  arrange(desc(n)) %>%
+  group_by(village_number) %>%
+  summarise(village_name = first(local_village_name))
+
+# Get table for master_table, requested 25 Oct
+master_table <-
+  left_join(x = census_old,
+            y = census_spatial_ll@data %>%
+              filter(!duplicated(house_number)) %>%
+              mutate(problematic = FALSE) %>%
+              dplyr::select(house_number, problematic,
+                            within_1k_voronoi_buffer,
+                            cluster,
+                            status),
+            by = 'house_number') %>%
+  mutate(problematic = ifelse(is.na(problematic), 'Problematic', 'No problems suspected'),
+         buffer_status = ifelse(within_1k_voronoi_buffer, 'Buffer', 'Core'),
+         spray_status = ifelse(status, 'SPRAY', 'NO SPRAY')) %>%
+  arrange(problematic) %>%
+  left_join(village_names)
+master_table <- master_table[,unique(c('house_number', 
+                         'village_number', 
+                         'village_name',
+                         'problematic', 
+                         'nearest_neighbors',
+                         'buffer_status',
+                         'cluster',
+                         'spray_status'))
+                         # 'lng',
+                         # 'lat'                         ))
+                         ]
+write_csv(master_table, '~/Desktop/master_table_with_neighbors.csv')
+names(master_table) <- toupper(gsub('_', ' ', names(master_table)))
+DT::datatable(master_table)
+```

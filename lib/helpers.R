@@ -129,15 +129,6 @@ leaflet_village_clean <- function(i){
       the_border <- border
       the_border_projected <- border_projected
       
-      # # Get internal buffer
-      # if(class(border)[[1]] != 'SpatialPoints'){
-      #   internal <- rgeos::gBuffer(the_border_projected, width = -1000)
-      #   # Make lat long
-      #   if(!is.null(class(internal)) & class(internal) != 'NULL'){
-      #     internal <- spTransform(internal, proj4string(border))
-      #   }
-      # }
-      
       # Generate colors
       colors <- rep('darkblue', nrow(the_data))
       # colors[the_data$buffer] <- 'blue'
@@ -212,6 +203,238 @@ leaflet_village_clean <- function(i){
       #                  color = 'grey',
       #                  dashArray = '1,5')
       # }
+      return(ll)
+    }
+  }
+  
+}
+
+
+# Like leaflet_village, but assumes all points are clean
+leaflet_village_clean_with_buffer <- function(i){
+  message(i)
+  this_village_number <- village_df$village_number[i]
+  this_spray_status <- village_df$status[i]
+  if(!is.na(this_village_number)){
+    # Get the points only
+    sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
+    if(nrow(sub_census) > 0){
+      sub_census_projected <- 
+        census_spatial[which(census_spatial$village_number == this_village_number),]
+      
+      # Get the border
+      border <- gConvexHull(sub_census)
+      border_projected <- gConvexHull(sub_census_projected)
+      
+      the_data <- sub_census
+      the_border <- border
+      the_border_projected <- border_projected
+      
+      # Get internal buffer
+      if(class(border)[[1]] != 'SpatialPoints'){
+        internal <- rgeos::gBuffer(the_border_projected, width = -1000)
+        # Make lat long
+        if(!is.null(class(internal)) & class(internal) != 'NULL'){
+          internal <- spTransform(internal, proj4string(border))
+        }
+      }
+      
+      # Generate colors
+      colors <- rep('darkblue', nrow(the_data))
+      # colors[the_data$buffer] <- 'blue'
+      
+      # The village number
+      the_village_number <- the_data$village_number[1]
+      
+      # The village df row
+      the_village_df_row <- village_df %>% filter(village_number == the_village_number)
+      
+      # Get the maximum distance between two houses in kilometers
+      max_d <- paste0(round(max(apply(geosphere::distm(the_data, fun = distVincentySphere), 
+                                      2, 
+                                      max, na.rm = TRUE), 
+                                na.rm = TRUE) / 1000, digits = 1), 
+                      ' K')
+      
+      #   # Legend title
+      legend_title <- paste0('Village: ',
+                             the_village_number,
+                             '. Max distance: ',
+                             max_d,
+                             '. ',
+                             ifelse(
+                               ifelse(is.na(this_spray_status), 'No spray.',
+                                      ifelse(this_spray_status,
+                                             'SPRAY.',
+                                             'No spray.'))))
+
+      ll <- 
+        leaflet() %>%
+        # addProviderTiles("OpenStreetMap.Mapnik") %>%
+        addProviderTiles("Esri.WorldImagery") %>%
+        # addProviderTiles("CartoDB.PositronOnlyLabels") %>%
+        # addProviderTiles("Stamen.Watercolor") %>% 
+        # addProviderTiles("Stamen.TonerHybrid") %>%
+        addProviderTiles('Stamen.TonerLabels') %>%
+        addCircleMarkers(lng = the_data$lng,
+                         lat = the_data$lat,
+                         color = colors,
+                         fillColor = colors,
+                         radius = 2.5,
+                         opacity = 0,
+                         fillOpacity = 0.5,
+                         popup = paste0('Household: ', the_data$house_number, ' Village number: ',
+                                        the_data$village_number)) %>%
+        addLegend("bottomright", 
+                  colors = NA,
+                  labels = ' ',
+                  # colors = c('darkorange', 'blue'),
+                  # labels = c('Within 2km of other village', 'xxx'),
+                  title = legend_title,
+                  opacity = 1 )
+      
+      if(!class(border)[[1]] %in% c('SpatialPoints', 'NULL')){
+        ll <-
+          ll %>%
+          addPolylines(data = the_border, color = 'black',
+                       dashArray = '1,5,5,5,')
+      }
+      # BUFFER
+      if(!class(internal)[[1]] %in% c('SpatialPoints', 'NULL')){
+        ll <-
+          ll %>%
+          addPolylines(data = internal,
+                       color = 'red',
+                       dashArray = '1,5,5,5,5')
+      }
+      return(ll)
+    }
+  }
+  
+}
+
+
+
+leaflet_village_clean_with_voronoi_buffer <- function(i){
+  message(i)
+  this_village_number <- village_df$village_number[i]
+  this_spray_status <- village_df$status[i]
+  if(!is.na(this_village_number)){
+    # Get the points only
+    sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
+    if(nrow(sub_census) > 0){
+      village_name <- sub_census@data %>%
+        group_by(local_village_name) %>%
+        tally %>%
+        arrange(desc(n)) %>%
+        dplyr::select(local_village_name)
+      village_name <- village_name$local_village_name[1]
+      sub_census_projected <- 
+        census_spatial[which(census_spatial$village_number == this_village_number),]
+      
+      # Get the border
+      border <- gConvexHull(sub_census)
+      border_projected <- gConvexHull(sub_census_projected)
+      
+      the_data <- sub_census
+      the_border <- border
+      the_border_projected <- border_projected
+      
+      # Get the voronoi border
+      border_voronoi <- vv_ll[which(vv_ll$village_number == this_village_number),]
+      
+      # Get the buffered voronoi border
+      border_voronoi_buffered <- vvb_ll[which(vvb_ll$village_number == this_village_number),]
+      
+      # Generate colors
+      colors <- rep('darkblue', nrow(the_data))
+      # colors[the_data$buffer] <- 'blue'
+      
+      # The village number
+      the_village_number <- the_data$village_number[1]
+      
+      # The village df row
+      the_village_df_row <- village_df %>% filter(village_number == the_village_number)
+      
+      # Get the maximum distance between two houses in kilometers
+      max_d <- paste0(round(max(apply(geosphere::distm(the_data, fun = distVincentySphere), 
+                                      2, 
+                                      max, na.rm = TRUE), 
+                                na.rm = TRUE) / 1000, digits = 1), 
+                      ' K')
+      
+      # Get number of villagers in buffer zone
+      villagers <- nrow(sub_census)
+      if(length(border_voronoi_buffered@polygons) == 0){
+        villagers_in_buffer <- villagers
+      } else {
+        villagers_in_buffer <- length(which(is.na(over(sub_census, border_voronoi_buffered))))
+      }
+      villagers_in_core <- villagers - villagers_in_buffer
+      #   # Legend title
+      legend_title <- paste0(village_name,
+                             ' (village: ',
+                             the_village_number,
+                             # '. Max distance: ',
+                             # max_d,
+                             '). ',
+                             villagers,
+                             ' villagers (',
+                             villagers_in_core,
+                             ' in core)',
+                             '. ',
+                               ifelse(is.na(this_spray_status), 'No spray.',
+                                      ifelse(this_spray_status,
+                                             'SPRAY.',
+                                             'No spray.')))
+      
+      ll <- 
+        leaflet() %>%
+        # addProviderTiles("OpenStreetMap.Mapnik") %>%
+        addProviderTiles("Esri.WorldImagery") %>%
+        # addProviderTiles("CartoDB.PositronOnlyLabels") %>%
+        # addProviderTiles("Stamen.Watercolor") %>% 
+        # addProviderTiles("Stamen.TonerHybrid") %>%
+        addProviderTiles('Stamen.TonerLabels') %>%
+        addCircleMarkers(lng = the_data$lng,
+                         lat = the_data$lat,
+                         color = colors,
+                         fillColor = colors,
+                         radius = 2.5,
+                         opacity = 0,
+                         fillOpacity = 0.5,
+                         popup = paste0('Household: ', the_data$house_number, ' Village number: ',
+                                        the_data$village_number)) %>%
+        addLegend("bottomright", 
+                  colors = NA,
+                  labels = ' ',
+                  # colors = c('darkorange', 'blue'),
+                  # labels = c('Within 2km of other village', 'xxx'),
+                  title = legend_title,
+                  opacity = 1 )
+      
+      if(!class(border)[[1]] %in% c('SpatialPoints', 'NULL')){
+        ll <-
+          ll %>%
+          addPolylines(data = the_border, color = 'black',
+                       dashArray = '1,5,5,5,')
+      }
+      
+      if((!class(border_voronoi)[[1]] %in% c('SpatialPoints', 'NULL')) &
+         length(border_voronoi@polygons)){
+        ll <-
+          ll %>%
+          addPolylines(data = border_voronoi, color = 'red',
+                       dashArray = '1,5,5,5,')
+      }
+      if((!class(border_voronoi_buffered)[[1]] %in% c('SpatialPoints', 'NULL')) &
+         length(border_voronoi_buffered@polygons) > 0){
+        ll <-
+          ll %>%
+          addPolylines(data = border_voronoi_buffered, color = 'blue',
+                       dashArray = '1,5,5,5,')
+      }
+      
       return(ll)
     }
   }
@@ -312,8 +535,20 @@ identify_buffers <-
     return(spatial_ll_census)
   }
 
-
-
+# Identify buffers voronoi
+identify_buffers_voronoi <- 
+  function(census_spatial_ll = census_spatial_ll,
+           distance_matrix = distance_matrix,
+           vvb_ll = vvb_ll){
+    require(geosphere)
+    # Create placeholder variable
+    census_spatial_ll$within_1k_voronoi_buffer <- NA
+    # go through each row, identify which are within the buffer or not
+    x <- vvb_ll$village_number[over(census_spatial_ll, y = polygons(vvb_ll))]
+    census_spatial_ll$within_1k_voronoi_buffer <- 
+      ifelse(is.na(x), TRUE, FALSE)
+    return(census_spatial_ll)
+  }
 # MAKE MASTER MAP
 master_map <- function(){
   
@@ -461,7 +696,8 @@ leaflet_village_master <- function(){
           this_color <- village_colors$color[i]
           ll <-
             ll %>%
-            addPolylines(data = the_border, color = this_color,
+            addPolylines(data = the_border, 
+                         color = this_color,
                          # dashArray = '1,5',
                          opacity = 0.6,
                          popup = village_df$village_number[i]) %>%
@@ -490,6 +726,113 @@ leaflet_village_master <- function(){
   
   return(ll)
 }
+
+
+# Like leaflet_village, but aall together
+leaflet_village_master_voronoi_buffer <- function(){
+  
+  color_numbers <- as.numeric(factor(village_df$village_number))
+  color_palette <- colorRampPalette(brewer.pal('Spectral', n = 9))(max(color_numbers, na.rm = TRUE))
+  color_palette <- sample(color_palette, length(color_palette))
+  the_colors <- color_palette[color_numbers]
+  village_colors <- data_frame(village_number = village_df$village_number,
+                               color = the_colors)
+  colors <- left_join(census_spatial_ll@data,
+                      village_colors,
+                      by = 'village_number') %>%
+    dplyr::select(color) %>%
+    unlist %>%
+    as.character()
+  
+  
+  ll <-  
+    leaflet() %>%
+    # addProviderTiles("OpenStreetMap.Mapnik") %>%
+    # addProviderTiles("Esri.WorldImagery") %>%
+    # addProviderTiles("CartoDB.PositronOnlyLabels") %>%
+    # addProviderTiles("Stamen.Watercolor") %>% 
+    addProviderTiles("Stamen.Toner") %>%
+    addProviderTiles('Stamen.TonerLabels') 
+  
+  # Now loop through and add borders
+  for (i in 1:nrow(vvb_ll)){
+    message(i)
+    this_village_number <- village_df$village_number[i]
+    if(!is.na(this_village_number)){
+      # Get the points only
+      sub_census <- census_spatial_ll[which(census_spatial_ll$village_number == this_village_number),]
+      if(nrow(sub_census) > 0){
+        sub_census_projected <- 
+          census_spatial[which(census_spatial$village_number == this_village_number),]
+        
+        # Get the border
+        border <- gConvexHull(sub_census)
+        the_border <- border
+        
+        # Get the voronoi buffered border
+        border_voronoi_buffered <-
+          vvb_ll[vvb_ll$village_number == this_village_number,]
+        
+        if((!class(border)[[1]] %in% c('SpatialPoints', 'NULL'))){
+          this_color <- village_colors$color[i]
+          ll <-
+            ll %>%
+            addPolylines(data = the_border, 
+                         color = 'black',
+                         dashArray = '1,,,,,',
+                         opacity = 0.6,
+                         popup = village_df$village_number[i]) %>%
+            addPolygons(data = the_border,
+                        color = 'black',
+                        popup = village_df$village_number[i])
+        }
+        
+        if(length(border_voronoi_buffered@polygons) > 0 &
+           (!class(border_voronoi_buffered)[[1]] %in% c('SpatialPoints', 'NULL'))){
+          this_color <- village_colors$color[i]
+          ll <-
+            ll %>%
+            addPolylines(data = border_voronoi_buffered, color = this_color,
+                         # dashArray = '1,5',
+                         opacity = 0.6,
+                         popup = village_df$village_number[i]) %>%
+            addPolygons(data = the_border,
+                        color = this_color,
+                        popup = village_df$village_number[i])
+        }
+        
+        
+      }
+    }
+  }
+  
+  # Add all points
+  ll <-
+    ll %>%
+    addCircleMarkers(lng = census_spatial_ll$lng,
+                     lat = census_spatial_ll$lat,
+                     color = colors,
+                     fillColor = colors,
+                     radius = 2.5,
+                     opacity = 0,
+                     fillOpacity = 0.5,
+                     popup = paste0('Household: ', 
+                                    census_spatial_ll$house_number, 
+                                    ' Village number: ',
+                                    census_spatial_ll$village_number,
+                                    ifelse(census_spatial_ll$within_1k_voronoi_buffer,
+                                           ' In buffer',
+                                           ' In core'),
+                                    ifelse(is.na(census_spatial_ll$status),
+                                           ' NO SPRAY',
+                                           ifelse(census_spatial_ll$status,
+                                                  ' SPRAY',
+                                                  ' NO SPRAY')))) 
+  
+  
+  return(ll)
+}
+
 
 # Get distance matrix
 get_distance_matrix <- function(spatial_ll_census = census_spatial_ll){
@@ -521,4 +864,128 @@ nearest_neighbor <- function(census_spatial_ll = census_spatial_ll,
     nn[i] <- paste0(the_nearest, collapse = ';')
   }
   return(nn)
+}
+
+# Create delaunay triangulation / voronoi tiles for entire surface
+voronoi <- function(spatial_census_ll = census_spatial_ll){
+  
+  spatial_census_ll@data <- data.frame(spatial_census_ll@data)
+  
+  # Fix row names
+  row.names(spatial_census_ll) <- 1:nrow(spatial_census_ll)
+  
+  # Remove any identical ones
+  spatial_census_ll <- spatial_census_ll[!duplicated(spatial_census_ll$lng,
+                                                      spatial_census_ll$lat),]
+
+  
+  # Helper function to create coronoi polygons (tesselation, not delaunay triangles)
+  # http://carsonfarmer.com/2009/09/voronoi-polygons-with-r/
+  voronoipolygons = function(layer) {
+    require(deldir)
+    crds = layer@coords
+    z = deldir(crds[,1], crds[,2])
+    w = tile.list(z)
+    polys = vector(mode='list', length=length(w))
+    require(sp)
+    for (i in seq(along=polys)) {
+      pcrds = cbind(w[[i]]$x, w[[i]]$y)
+      pcrds = rbind(pcrds, pcrds[1,])
+      polys[[i]] = Polygons(list(Polygon(pcrds)), ID=as.character(i))
+    }
+    SP = SpatialPolygons(polys)
+    voronoi = SpatialPolygonsDataFrame(SP, data=data.frame(x=crds[,1], 
+                                                           y=crds[,2], row.names=sapply(slot(SP, 'polygons'), 
+                                                                                        function(x) slot(x, 'ID'))))
+  }
+  # http://gis.stackexchange.com/questions/180682/merge-a-list-of-spatial-polygon-objects-in-r
+  appendSpatialPolygons <- function(x) {
+    ## loop over list of polygons
+    for (i in 2:length(x)) {
+      # create initial output polygon
+      if (i == 2) {
+        out <- maptools::spRbind(x[[i-1]], x[[i]])
+        # append all following polygons to output polygon  
+      } else {
+        out <- maptools::spRbind(out, x[[i]])
+      }
+    }
+    return(out)
+  }
+  
+  tile_polys <- voronoipolygons(spatial_census_ll)
+  # Add the village numbers
+  tile_polys@data$village_number <- the_villages <- spatial_census_ll$village_number
+  cols <- rainbow(as.numeric(factor(tile_polys@data$village_number)))
+  # plot(mop_ll)
+  # plot(tile_polys, border = FALSE, col = cols, add = TRUE)
+  
+  # Disolve borders
+  x = gUnaryUnion(tile_polys, id = tile_polys$village_number)
+  
+  jdata = SpatialPolygonsDataFrame(Sr=x, 
+                                   data=data.frame(village_number = as.numeric(as.character(names(x)))),FALSE)
+  
+  return(jdata)
+}
+
+# Update other objects
+update_other_objects <- function(){
+  these_columns <- 
+    names(census_spatial_ll)[!names(census_spatial_ll) %in% names(census)]
+  for (j in 1:length(these_columns)){
+    this_column <- data.frame(census_spatial_ll@data)[,these_columns[j]]
+    census_spatial@data[,these_columns[j]] <- this_column
+    census[,these_columns[j]] <- this_column
+  }
+  assign('census_spatial',
+         census_spatial,
+         envir = .GlobalEnv)
+  assign('census',
+         census,
+         envir = .GlobalEnv)
+}
+
+# Get spray status
+get_spray_status <- function(spray_file = 'Final spray no spray list.xlsx'){
+  
+  # Get spray status
+  spray_status <- read_excel(spray_file)
+  
+  # Clean up
+  spray_status <- spray_status[,1:11]
+  names(spray_status) <-
+    tolower(gsub('.', '_', names(spray_status), fixed = TRUE))
+  names(spray_status) <- gsub(' |-', '_', names(spray_status))
+  
+  # Remove NA rows
+  spray_status <- 
+    spray_status %>%
+    filter(!is.na(cluster))
+  
+  # Create a status column
+  spray_status$status <- spray_status$spray_status
+  spray_status$status <-
+    ifelse(is.na(spray_status$status),
+           FALSE,
+           ifelse(spray_status$status == 'YES',
+                  TRUE,
+                  NA))
+  spray_status$spray_status <- NULL
+  
+  
+  # Get village-specific spray status
+  village_df$status <- NA
+  for (i in 1:nrow(spray_status)){
+    this_cluster <- spray_status$cluster[i]
+    this_spray_status <- spray_status$status[i]
+    these_villages <- unlist(lapply(strsplit(spray_status$village_code[i], split = ','), as.numeric))
+    village_df$status[village_df$village_number %in% these_villages] <- this_spray_status
+  }
+  assign('spray_status',
+         spray_status,
+         envir = .GlobalEnv)
+  assign('village_df',
+         village_df,
+         envir = .GlobalEnv)
 }
