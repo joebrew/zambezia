@@ -1,3 +1,4 @@
+
 identify_problems <- function(){
   
   # Create placeholder vector of incorrect houses

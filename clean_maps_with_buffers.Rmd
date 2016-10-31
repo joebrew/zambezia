@@ -59,7 +59,12 @@ knit_engines$set(asis = function(options) {
 #### READ IN AND CLEAN UP DATA
 
 # Read in final dataset, as given by Orvahlo on October 24, 2016
-census <- read_excel('Limpesa_Final__241016_For maps.xlsx')
+# census <- read_excel('Limpesa_Final__241016_For maps.xlsx')
+# Read in corrected final dataset, sent by Edgar on October 30, 2016
+# census <- read_excel('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.xls')
+census <- read_csv('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.csv')
+# Fix weird header
+names(census)[6] <- 'locality_Final'
 
 # Get more nicely named geographic coordinate column names
 census$lat <- census$y <- census$latitude <- census$gpc_lat
@@ -76,6 +81,9 @@ census$administrative_post <- census$administrative_post_final
 census$house_number <- census$houseno_Final_1
 census$locality <- census$locality_Final
 
+# Convert village number to numeric
+census$village_number <- 
+  as.numeric(as.character(census$village_number))
 
 # Remove all NA rows
 census <- census %>%
@@ -256,8 +264,7 @@ plot(example_village,
      col = adjustcolor('darkred', alpha.f = 0.6),
      pch = 1)
 points(others, 
-       col = adjustcolor('black', alpha.f = 0.5), 
-       add = TRUE)
+       col = adjustcolor('black', alpha.f = 0.5))
 ```
 
 If we draw a "precise" literal border around Mugurrumba, it looks like this:
@@ -303,8 +310,7 @@ plot(example_village,
      col = adjustcolor('darkred', alpha.f = 0.6),
      pch = 1)
 points(others, 
-       col = adjustcolor('black', alpha.f = 0.5), 
-       add = TRUE)
+       col = adjustcolor('black', alpha.f = 0.5))
 plot(vv_ll[vv_ll$village_number == 7169,], 
      add = T,
      col = adjustcolor('black', alpha.f = 0.2),
@@ -350,7 +356,7 @@ the_points@data <- the_points@data %>%
             by = 'village_number')
 
 plot(mop_ll)
-plot(vvb_ll, col = adjustcolor(cols, alpha.f = 0.3),add = TRUE, border = adjustcolor('black', alpha.f = 0.5))
+plot(vvb_ll, col = adjustcolor(cols, alpha.f = 0.6),add = TRUE, border = NA)
 plot(mop_ll, add = TRUE)
 points(the_points,
        col = adjustcolor(the_points@data$col, alpha.f = 0.5),
@@ -374,13 +380,13 @@ ggplot(data = census_spatial_ll@data,
 
 The voronoi approach is the best of all options. It captures as many households as possible, while eliminating those that are too close to other villages to be useful. 
 
-For example, for the 173 residents of the village of Ntada, they are all within the core area.
+For example, for the residents of the village of Ntada, they are all within the core area.
 
 ```{r}
 leaflet_village_clean_with_voronoi_buffer(1)
 ```
 
-For the 166 villagers of Bone, 152 are in the core (and 14 are in the buffer).
+For the 166 villagers of Bone, most are in the core (a few are in the buffer).
 
 ```{r}
 leaflet_village_clean_with_voronoi_buffer(2)
@@ -437,16 +443,17 @@ The below table contains _all_ households, along with the relevant information p
 ```{r}
 village_names <- 
   census %>%
-  group_by(village_number, local_village_name) %>%
+  group_by(village_number, locality, local_village_name) %>%
   tally %>%
   ungroup %>%
   arrange(desc(n)) %>%
   group_by(village_number) %>%
-  summarise(village_name = first(local_village_name))
+  summarise(locality_name = first(locality),
+            village_name = first(local_village_name))
 
 # Get table for master_table, requested 25 Oct
 master_table <-
-  left_join(x = census_old,
+  left_join(x = census_old %>% dplyr::select(-problematic),
             y = census_spatial_ll@data %>%
               filter(!duplicated(house_number)) %>%
               mutate(problematic = FALSE) %>%
