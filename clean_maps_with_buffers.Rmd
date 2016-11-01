@@ -130,6 +130,41 @@ mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
 # proj4string(mop_ll) <- proj4string(zam)
 ```
 
+```{r}
+# Read in data at the child-specific level
+children <- read_csv('redcap/CensusMopeia_DATA_2016-11-01_1734.csv')
+
+# Keep only those households with children
+children <- 
+  children %>%
+  filter(!is.na(perm_id_final)) %>%
+  mutate(permid = perm_id_final) %>%
+  dplyr::select(-perm_id_final)
+
+# Keep only those children which appear in the non-problematic census records
+children <-
+  children %>%
+  filter(parent_auri %in% census$uri) 
+
+# Keep only the columns of interest
+children <- 
+  children %>%
+  dplyr::select(permid,
+                dob,
+                name,
+                gender,
+                keeper,
+                parent_auri)
+
+# Get the household id
+children <-
+  children %>%
+  left_join(census %>% 
+              dplyr::select(house_number,
+                            village_number,
+                            uri),
+            by = c('parent_auri' = 'uri'))
+```
 
 
 ```{r}
@@ -168,21 +203,57 @@ if('clean_maps_with_buffers_data.RData' %in% dir()){
   census_spatial <- census_spatial[which(!census_spatial$house_number %in% incorrect_houses),]
   census_spatial_ll <- census_spatial_ll[which(!census_spatial_ll$house_number %in% incorrect_houses),]
   
+  # Get spray status
+  get_spray_status()
+  village_df <- village_df %>% filter(!is.na(village_number),
+                                      !duplicated(village_number))
+
+  # Join spray status to objects
+  joiner <- 
+    village_df %>%
+                dplyr::select(village_number, cluster, status)
+  census_spatial_ll@data <-
+    left_join(census_spatial_ll@data,
+              joiner,
+              by = 'village_number')
+  census_spatial@data <-
+    left_join(census_spatial@data,
+              joiner,
+              by = 'village_number')
+  census <-
+    left_join(census,
+              joiner,
+              by = 'village_number')
+  
   # Get the voronoi tesselation surface
   vv <- voronoi(spatial_census_ll = census_spatial_ll)
+  # Get the voronoi tesselation surface at the level of the spray zones
+  vv_spray <- voronoi_spray_level(spatial_census_ll = census_spatial_ll)
+  
   # Get a non lat long version of voronoi surface
+  # For the village level
   proj4string(vv) <- proj4string(census_spatial_ll)
   vv_ll <- vv
   vv <- sp::spTransform(vv, CRSobj = proj4string(census_spatial))
+  
+  # For the spray-level
+  proj4string(vv_spray) <- proj4string(census_spatial_ll)
+  vv_spray_ll <- vv_spray
+  vv_spray <- sp::spTransform(vv_spray, CRSobj = proj4string(census_spatial))
     
   # Get the buffered voronoi tesselation surface
-  vvb <- rgeos::gBuffer(vv, 
+  vvb <- rgeos::gBuffer(vv,  # village level
                         byid = TRUE, 
                         id = vv$village_number,
+                        width = -1000)
+  vvb_spray <- rgeos::gBuffer(vv_spray,  # village level
+                        byid = TRUE, 
+                        id = vv$status,
                         width = -1000)
   
   # Convert back to lat lon
   vvb_ll <- spTransform(vvb, CRSobj = proj4string(census_spatial_ll))
+  vvb_ll_spray <- spTransform(vvb_spray, CRSobj = proj4string(census_spatial_ll))
   
   # Identify buffers voronoi
   census_spatial_ll <- 
@@ -190,6 +261,12 @@ if('clean_maps_with_buffers_data.RData' %in% dir()){
     census_spatial_ll = census_spatial_ll,
            distance_matrix = distance_matrix,
            vvb_ll = vvb_ll)
+  
+  # Identify buffers voronoi at spray level
+  census_spatial_ll <- 
+    identify_buffers_voronoi_spray_level(census_spatial_ll = census_spatial_ll,
+           distance_matrix = distance_matrix,
+           vvb_ll_spray = vvb_ll_spray)
   
   # Get buffers through distance to other villages
   census_spatial_ll <- identify_buffers(spatial_ll_census = census_spatial_ll,
@@ -203,30 +280,27 @@ if('clean_maps_with_buffers_data.RData' %in% dir()){
 }
 
 
+# Set all NA statuses to FALSE
+census$status[is.na(census$status)] <- FALSE
+census_spatial$status[is.na(census_spatial$status)] <- FALSE
+census_spatial_ll$status[is.na(census_spatial_ll$status)] <- FALSE
+village_df$status[is.na(village_df$status)] <- FALSE
+
 # Resource helpers
 source('lib/helpers.R')
 
-# Get spray status
-get_spray_status()
-village_df <- village_df %>% filter(!is.na(village_number),
-                                    !duplicated(village_number))
+# Get children's spray status
+children <- 
+  left_join(children,
+            census %>% 
+              dplyr::select(uri,
+                            status),
+            by = c('parent_auri' = 'uri'))
+# Remove those with no spray status
+children <- 
+  children %>%
+  filter(!is.na(status))
 
-# Join spray status to objects
-joiner <- 
-  village_df %>%
-              dplyr::select(village_number, cluster, status)
-census_spatial_ll@data <-
-  left_join(census_spatial_ll@data,
-            joiner,
-            by = 'village_number')
-census_spatial@data <-
-  left_join(census_spatial@data,
-            joiner,
-            by = 'village_number')
-census <-
-  left_join(census,
-            joiner,
-            by = 'village_number')
 ```
 
 
@@ -234,7 +308,7 @@ census <-
 
 This document contains maps and tables pertaining to the (cleaned) Mopeia trial data. Its purpose is to explain the methods used for buffering, as well as provide visualizations and tables useful for the designation of spray / no-spray zones and study participant selection. 
 
-It was produced late afternoon (GMT +2) on Friday, October 28th, 2016. It uses data sent from Charfudin Sacoor to Joe Brew on the morning of Monday, October 24th, 2016 (`Limpesa_Final__241016_For maps.xlsx`).
+It was produced the morning (GMT +2) of Tuesday, November 1st, 2016. It uses data sent from Charfudin Sacoor to Joe Brew on the evening of Sunday, October 30th, 2016 (`Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.xlsx`).
 
 # Methods
 
@@ -376,33 +450,69 @@ ggplot(data = census_spatial_ll@data,
   theme_bw()
 ```
 
-### Issues with the voronoi approach
+### Issues with village-specific buffering
 
-The voronoi approach is the best of all options. It captures as many households as possible, while eliminating those that are too close to other villages to be useful. 
+The above approach, though effective at avoiding contamination, unnecessarily delineates "borders" at the village-level, even though what we're most concerned about is contamination between spray and no-spray zones. In other words, a border and buffer between two villages of identical spray status is completely unnecessary and leads to an avoidable reduction in our number of eligible study participants.
 
-For example, for the residents of the village of Ntada, they are all within the core area.
+To address this, we again use voronoi tesselation. However, instead of defining regions by village, we define only two regions: "spray" and "no-spray". Each region is multi-polygonal. Borders are defined only in the intersection of the regions, and buffers are drawn only between areas of opposite spray status.
 
-```{r}
-leaflet_village_clean_with_voronoi_buffer(1)
-```
-
-For the 166 villagers of Bone, most are in the core (a few are in the buffer).
+Our spray / no-spray map looks like this:
 
 ```{r}
-leaflet_village_clean_with_voronoi_buffer(2)
+the_data <- vv_spray_ll
+the_colors <- ifelse(the_data@data$status, 'darkred', 'darkgreen')
+the_colors <- adjustcolor(the_colors, alpha.f = 0.6)
+status <- the_data$status
+plot(mop_ll)
+plot(the_data, add = TRUE, col = the_colors, border = adjustcolor('black', alpha.f = 0.5))
+legend('bottomright',
+       fill = the_colors,
+       legend = c('Spray', 'No spray'))
 ```
 
-However, for some villages (like Eduardo Mondlane), the households are so close to other villages that _none_ of the households are considered "core".
+We add 1 kilometer internal buffers to each border to get the following:
 
 ```{r}
-leaflet_village_clean_with_voronoi_buffer(4)
+the_data <- vvb_ll_spray
+the_colors <- ifelse(the_data@data$status, 'darkred', 'darkgreen')
+the_colors <- adjustcolor(the_colors, alpha.f = 0.6)
+status <- the_data$status
+plot(mop_ll)
+plot(the_data, col = the_colors, border = adjustcolor('black', alpha.f = 0.5), add = TRUE)
+legend('bottomright',
+       fill = the_colors,
+       legend = c('Spray', 'No spray'))
 ```
 
-### Potential remediations
+We can then add each household onto our surface to visualize in which areas (spray, no-spray, or buffer) each households falls into.
 
-One potential work-around is to do all boundary-creation (delaunay triangulation and voronoi tesselation) at the level of the "cluster" rather than the "village" (bairro). This way, there would be fewer buffers, and there would be no buffers between villages of identical spray status.
+```{r}
+the_data <- vvb_ll_spray
+the_colors <- ifelse(the_data@data$status, 'darkred', 'darkgreen')
+the_colors <- adjustcolor(the_colors, alpha.f = 0.6)
 
-Another alternative would be to essentially designate only two clusters: spray and no-spray. The only buffers created, in this strategy, would be between spray and no-spray zones. Between clusters and villages of identical spray status, no buffer zones would be created.
+plot(mop_ll)
+plot(the_data, col = the_colors, border = adjustcolor('black', alpha.f = 0.5), add = TRUE)
+legend('bottomright',
+       fill = the_colors,
+       legend = c('Spray', 'No spray'))
+points(census_spatial_ll,
+       col = ifelse(census_spatial_ll$within_1k_voronoi_buffer_spray, 
+                    'blue',
+                    ifelse(census_spatial_ll$status,
+                           'darkred',
+                           ifelse(!census_spatial_ll$status,
+                                  'darkgreen',
+                                  ifelse(is.na(census_spatial_ll$status), 'darkgreen', NA)))),
+       pch = 3,
+       cex = 0.3)
+legend('bottomleft',
+       pch = 3,
+       pt.cex = 0.3,
+       col = c('darkred', 'darkgreen', 'blue'),
+       legend = c('Spray', 'No spray', 'Buffer'))
+```
+
 
 
 ### Code 
@@ -422,12 +532,15 @@ htmltools::tagList(maps)
 ```
 
 
-# Master map
+# Household map
 
-The below map shows all households, except for the `r nrow(census_old) - nrow(census)` households algorithmically removed due to suspicion of error. Each village's core area is denoted by the solid line of the color of that village's points. Each village's "strict" border is denoted by a grey polygon. Each point (household) is clickable; upon click, the household number, village number, core/buffer status and spray status are shown. 
+The below map shows all households, except for the `r nrow(census_old) - nrow(census)` households algorithmically removed due to suspicion of error. The green areas are "no spray", the red areas are "spray" and the white areas are in buffer. 
+
+Each point (household) is clickable; upon click, the household number, village number, core/buffer status and spray status are shown. Note that even households in white areas (buffers) received a spray / no-spray status; this can be viewed by clicking on those houses, or by viewing the "Household table" at the end of this document. 
 
 ```{r, eval = TRUE}
-leaflet_village_master_voronoi_buffer()
+# leaflet_village_master_voronoi_buffer()
+leaflet_village_master_voronoi_buffer_spray()
 ```
 
 
@@ -436,9 +549,10 @@ leaflet_village_master_voronoi_buffer()
 master_map()
 ```
 
-# Master table
 
-The below table contains _all_ households, along with the relevant information pertaining to spray status, buffer/core status, etc.
+# Household table
+
+The below table contains _all_ households, along with the relevant information pertaining to spray status, buffer/core status, number of children, etc. This table is interactive (ie, it can be re-ordered, etc.). Note that households not pertaining to a village with a designated spray / no-spray status are automatically marked as "no-spray".
 
 ```{r}
 village_names <- 
@@ -458,20 +572,21 @@ master_table <-
               filter(!duplicated(house_number)) %>%
               mutate(problematic = FALSE) %>%
               dplyr::select(house_number, problematic,
-                            within_1k_voronoi_buffer,
+                            within_1k_voronoi_buffer_spray,
                             cluster,
                             status),
             by = 'house_number') %>%
   mutate(problematic = ifelse(is.na(problematic), 'Problematic', 'No problems suspected'),
-         buffer_status = ifelse(within_1k_voronoi_buffer, 'Buffer', 'Core'),
+         buffer_status = ifelse(within_1k_voronoi_buffer_spray, 'Buffer', 'Core'),
          spray_status = ifelse(status, 'SPRAY', 'NO SPRAY')) %>%
   arrange(problematic) %>%
   left_join(village_names)
 master_table <- master_table[,unique(c('house_number', 
                          'village_number', 
                          'village_name',
-                         'problematic', 
-                         'nearest_neighbors',
+                         'number_of_children',
+                         # 'problematic', 
+                         # 'nearest_neighbors',
                          'buffer_status',
                          'cluster',
                          'spray_status'))
@@ -481,4 +596,74 @@ master_table <- master_table[,unique(c('house_number',
 write_csv(master_table, '~/Desktop/master_table_with_neighbors.csv')
 names(master_table) <- toupper(gsub('_', ' ', names(master_table)))
 DT::datatable(master_table)
+```
+
+# Study participant selection
+
+There are `r nrow(children)` children with clear, correct data who are eligible for study inclusion. Of these, the split between those assigned to spray and non-spray zones is approximatey 50/50.
+
+## Children table at village level
+
+The number of children per village can be seen below. Note, this only includes children from households that were not flagged as "problematic" by the geospatial error detection algorithm
+
+```{r}
+child_table <- 
+  children %>%
+  group_by(village_number) %>%
+  tally %>%
+  ungroup 
+child_table <- 
+  left_join(child_table,
+            village_names)
+names(child_table) <- c('Village number',
+                        'Number of children',
+                        'Locality name',
+                        'Village name')
+
+DT::datatable(child_table)
+```
+
+To assist with the randomized selection of eligible study participants, we randomize the order of the children in each village and then assign a "random_id" to each child. The "random_id" is a number between 1 and the number of children residing in that village.
+
+```{r}
+if('children_assignments.csv' %in% dir()){
+  children_assignments <- read_csv('children_assignments.csv')
+} else {
+  set.seed(25)
+  children <- children[sample(1:nrow(children), nrow(children)),]
+  children_assignments <- 
+    children %>%
+    mutate(dummy = 1) %>%
+    group_by(village_number) %>%
+    mutate(random_id = cumsum(dummy)) %>%
+    ungroup %>%
+    dplyr::select(-dummy)
+  write_csv(children_assignments,
+            'children_assignments.csv')
+}
+children <- children_assignments
+children <- children %>% arrange(village_number, random_id)
+
+# Clean up
+children <- children %>% left_join(village_names)
+children <- children %>%
+  dplyr::select(locality_name,
+                village_name,
+                village_number,
+                house_number,
+                random_id,
+                permid,
+                name,
+                dob,
+                gender,
+                keeper,
+                status)
+```
+
+## Children table at child level
+
+The below table has one row for each eligible child. The `random_id` field should be used for study recruitment. Essentially, children should be recruited beginning at `random_id` 1 for each village, and going up until the minimum number of participants (18) from each village has been reached.
+
+```{r}
+DT::datatable(children)
 ```

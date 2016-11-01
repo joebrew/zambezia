@@ -550,6 +550,22 @@ identify_buffers_voronoi <-
       ifelse(is.na(x), TRUE, FALSE)
     return(census_spatial_ll)
   }
+
+# Identify buffers voronoi at the spray level
+identify_buffers_voronoi_spray_level <- 
+  function(census_spatial_ll = census_spatial_ll,
+           distance_matrix = distance_matrix,
+           vvb_ll_spray = vvb_ll_spray){
+    require(geosphere)
+    # Create placeholder variable
+    census_spatial_ll$within_1k_voronoi_buffer_spray <- NA
+    # go through each row, identify which are within the buffer or not
+    x <- vvb_ll_spray$status[over(census_spatial_ll, y = polygons(vvb_ll_spray))]
+    census_spatial_ll$within_1k_voronoi_buffer_spray <- 
+      ifelse(is.na(x), TRUE, FALSE)
+    return(census_spatial_ll)
+  }
+
 # MAKE MASTER MAP
 master_map <- function(){
   
@@ -835,6 +851,113 @@ leaflet_village_master_voronoi_buffer <- function(){
 }
 
 
+
+# Master map with tesselations at spray level
+leaflet_village_master_voronoi_buffer_spray <- function(){
+  
+  color_numbers <- as.numeric(factor(village_df$status))
+  the_colors <- ifelse(village_df$status,
+                       'darkgreen',
+                       'darkred')
+  status_colors <- data_frame(status = village_df$status,
+                               color = the_colors)
+  colors <- left_join(census_spatial_ll@data,
+                      status_colors %>% filter(!duplicated(status)),
+                      by = 'status') %>%
+    dplyr::select(color) %>%
+    unlist %>%
+    as.character()
+  
+  status_df <- 
+    census_spatial_ll@data %>%
+    group_by(status) %>%
+    tally %>%
+    left_join(status_colors %>% filter(!duplicated(status)))
+  
+  
+  ll <-  
+    leaflet() %>%
+    # addProviderTiles("OpenStreetMap.Mapnik") %>%
+    # addProviderTiles("Esri.WorldImagery") %>%
+    # addProviderTiles("CartoDB.PositronOnlyLabels") %>%
+    # addProviderTiles("Stamen.Watercolor") %>% 
+    addProviderTiles("Stamen.Toner") %>%
+    addProviderTiles('Stamen.TonerLabels') 
+  
+  # Now loop through and add borders
+  for (i in 1:nrow(vvb_ll_spray)){
+    message(i)
+    this_status <- status_df$status[i]
+    if(!is.na(this_status)){
+      # Get the points only
+      sub_census <- census_spatial_ll[which(census_spatial_ll$status == this_status),]
+      if(nrow(sub_census) > 0){
+        sub_census_projected <- 
+          census_spatial[which(census_spatial$status == this_status),]
+        
+        # Get the border
+        border <- gConvexHull(sub_census)
+        the_border <- border
+        
+        # Get the non-buffered voronoi border
+        border_voronoi <-
+          vv_spray_ll[vv_spray_ll$status == this_status,]
+        
+        # Get the voronoi buffered border
+        border_voronoi_buffered <-
+          vvb_ll_spray[vvb_ll_spray$status == this_status,]
+        
+        if(length(border_voronoi_buffered@polygons) > 0 &
+           (!class(border_voronoi_buffered)[[1]] %in% c('SpatialPoints', 'NULL'))){
+          this_color <- status_df$color[i]
+          ll <-
+            ll %>%
+            addPolygons(data = border_voronoi_buffered, 
+                         color = this_color,
+                         # dashArray = '1,5',
+                         opacity = 0.6, weight = 1) 
+        }
+        
+        
+      }
+    }
+  }
+  
+  # Add all points
+  ll <-
+    ll %>%
+    addCircleMarkers(lng = census_spatial_ll$lng,
+                     lat = census_spatial_ll$lat,
+                     color = colors,
+                     fillColor = colors,
+                     radius = 2.5,
+                     opacity = 0,
+                     fillOpacity = 0.5,
+                     popup = paste0('Household: ', 
+                                    census_spatial_ll$house_number, 
+                                    ' Village number: ',
+                                    census_spatial_ll$village_number,
+                                    ifelse(census_spatial_ll$within_1k_voronoi_buffer_spray,
+                                           ' In buffer',
+                                           ' In core'),
+                                    ifelse(is.na(census_spatial_ll$status),
+                                           ' NO SPRAY',
+                                           ifelse(census_spatial_ll$status,
+                                                  ' SPRAY',
+                                                  ' NO SPRAY')))) 
+  
+  x <- SpatialPolygons(mop_ll@polygons)
+  proj4string(x) <- proj4string(mop_ll)
+  # Add polygon
+  ll <-
+    ll %>%
+    addPolylines(data = x)
+  # 
+  
+  return(ll)
+}
+
+
 # Get distance matrix
 get_distance_matrix <- function(spatial_ll_census = census_spatial_ll){
   distances <- geosphere::distm(spatial_ll_census, fun = distVincentySphere)
@@ -926,6 +1049,75 @@ voronoi <- function(spatial_census_ll = census_spatial_ll){
   
   jdata = SpatialPolygonsDataFrame(Sr=x, 
                                    data=data.frame(village_number = as.numeric(as.character(names(x)))),FALSE)
+  
+  return(jdata)
+}
+
+
+
+# Create delaunay triangulation / voronoi tiles for entire surface
+# at the level of spray zones, not the village lvel
+voronoi_spray_level <- function(spatial_census_ll = census_spatial_ll){
+  
+  spatial_census_ll@data <- data.frame(spatial_census_ll@data)
+  
+  # Fix row names
+  row.names(spatial_census_ll) <- 1:nrow(spatial_census_ll)
+  
+  # Remove any identical ones
+  spatial_census_ll <- spatial_census_ll[!duplicated(spatial_census_ll$lng,
+                                                     spatial_census_ll$lat),]
+  
+  
+  # Helper function to create coronoi polygons (tesselation, not delaunay triangles)
+  # http://carsonfarmer.com/2009/09/voronoi-polygons-with-r/
+  voronoipolygons = function(layer) {
+    require(deldir)
+    crds = layer@coords
+    z = deldir(crds[,1], crds[,2])
+    w = tile.list(z)
+    polys = vector(mode='list', length=length(w))
+    require(sp)
+    for (i in seq(along=polys)) {
+      pcrds = cbind(w[[i]]$x, w[[i]]$y)
+      pcrds = rbind(pcrds, pcrds[1,])
+      polys[[i]] = Polygons(list(Polygon(pcrds)), ID=as.character(i))
+    }
+    SP = SpatialPolygons(polys)
+    voronoi = SpatialPolygonsDataFrame(SP, data=data.frame(x=crds[,1], 
+                                                           y=crds[,2], row.names=sapply(slot(SP, 'polygons'), 
+                                                                                        function(x) slot(x, 'ID'))))
+  }
+  # http://gis.stackexchange.com/questions/180682/merge-a-list-of-spatial-polygon-objects-in-r
+  appendSpatialPolygons <- function(x) {
+    ## loop over list of polygons
+    for (i in 2:length(x)) {
+      # create initial output polygon
+      if (i == 2) {
+        out <- maptools::spRbind(x[[i-1]], x[[i]])
+        # append all following polygons to output polygon  
+      } else {
+        out <- maptools::spRbind(out, x[[i]])
+      }
+    }
+    return(out)
+  }
+  
+  tile_polys <- voronoipolygons(spatial_census_ll)
+  # Add the spray zones
+  tile_polys@data$status <- the_statuses <- 
+    ifelse(is.na(spatial_census_ll$status), FALSE,
+           ifelse(spatial_census_ll$status, TRUE,
+                  FALSE))
+  cols <- rainbow(as.numeric(factor(tile_polys@data$status)))
+  # plot(mop_ll)
+  # plot(tile_polys, border = FALSE, col = cols, add = TRUE)
+  
+  # Disolve borders
+  x = gUnaryUnion(tile_polys, id = tile_polys$status)
+  
+  jdata = SpatialPolygonsDataFrame(Sr=x, 
+                                   data=data.frame(status = as.logical(names(x))),FALSE)
   
   return(jdata)
 }
