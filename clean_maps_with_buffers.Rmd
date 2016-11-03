@@ -593,7 +593,7 @@ master_table <- master_table[,unique(c('house_number',
                          # 'lng',
                          # 'lat'                         ))
                          ]
-write_csv(master_table, '~/Desktop/master_table_with_neighbors.csv')
+write_csv(master_table, 'household_table.csv')
 names(master_table) <- toupper(gsub('_', ' ', names(master_table)))
 DT::datatable(master_table)
 ```
@@ -621,6 +621,7 @@ names(child_table) <- c('Village number',
                         'Village name')
 
 DT::datatable(child_table)
+write_csv(child_table, 'children_table_at_village_level.csv')
 ```
 
 To assist with the randomized selection of eligible study participants, we randomize the order of the children in each village and then assign a "random_id" to each child. The "random_id" is a number between 1 and the number of children residing in that village.
@@ -666,4 +667,5 @@ The below table has one row for each eligible child. The `random_id` field shoul
 
 ```{r}
 DT::datatable(children)
+write_csv(children, 'children_table_at_child_level.csv')
 ```
