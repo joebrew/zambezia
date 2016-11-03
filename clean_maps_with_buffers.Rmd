@@ -303,7 +303,6 @@ children <-
 children <- 
   children %>%
   filter(!is.na(status))
-
 ```
 
 
@@ -667,8 +666,8 @@ children <-
   left_join(children,
             census_spatial_ll@data %>%
               dplyr::select(house_number,
-                            buffer)) %>%
-  rename(buffer_status = buffer)
+                            within_1k_voronoi_buffer_spray)) %>%
+  rename(buffer_status = within_1k_voronoi_buffer_spray)
 ```
 
 ## Children table at child level
