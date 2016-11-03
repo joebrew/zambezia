@@ -171,8 +171,12 @@ children <-
 if('clean_maps_with_buffers_data.RData' %in% dir()){
   load('clean_maps_with_buffers_data.RData')
 } else {
+  # Get spray status (will use for clusters too)
+  get_spray_status() # produces spray_village (village level) and spray_status (cluster level)
+  
   # Make a dataframe of just villages (with cluster assignments)
-  village_df <- make_village_df(census = census)
+  village_df <- make_village_df(census = census,
+                                spray_village = spray_village)
   
   # Get a distance matrix (takes 2-3 minutes)
   distance_matrix <- get_distance_matrix(spatial_ll_census = census_spatial_ll)
@@ -203,8 +207,6 @@ if('clean_maps_with_buffers_data.RData' %in% dir()){
   census_spatial <- census_spatial[which(!census_spatial$house_number %in% incorrect_houses),]
   census_spatial_ll <- census_spatial_ll[which(!census_spatial_ll$house_number %in% incorrect_houses),]
   
-  # Get spray status
-  get_spray_status()
   village_df <- village_df %>% filter(!is.na(village_number),
                                       !duplicated(village_number))
 
@@ -212,6 +214,7 @@ if('clean_maps_with_buffers_data.RData' %in% dir()){
   joiner <- 
     village_df %>%
                 dplyr::select(village_number, cluster, status)
+  
   census_spatial_ll@data <-
     left_join(census_spatial_ll@data,
               joiner,

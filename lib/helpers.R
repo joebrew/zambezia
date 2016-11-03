@@ -87,7 +87,8 @@ identify_problems <- function(){
   
 }
 
-make_village_df <- function(census){
+make_village_df <- function(census, 
+                            spray_village = spray_village){
   # Get the area and other metrics for each village
   unique_village_numbers <- sort(unique(census$village_number))
   village_df <- census %>%
@@ -99,12 +100,15 @@ make_village_df <- function(census){
               incorrect_houses = NA,
               n_incorrect_houses = NA,
               problems = NA)
-  
-  # MERGE WITH THE CLUSTER ASSIGNMENTS FROM AUGUST
-  cluster_assignments <- readr::read_csv('outputs/cluster_assignments.csv')
+  # Join to spray village
   village_df <- 
-    village_df %>%
-    left_join(cluster_assignments)
+    village_df %>% left_join(spray_village)
+  
+  # # MERGE WITH THE CLUSTER ASSIGNMENTS FROM AUGUST
+  # cluster_assignments <- readr::read_csv('outputs/cluster_assignments.csv')
+  # village_df <- 
+  #   village_df %>%
+  #   left_join(cluster_assignments)
   # Row number
   village_df$row_number <- 1:nrow(village_df)
   return(village_df)
@@ -1168,17 +1172,31 @@ get_spray_status <- function(spray_file = 'Final spray no spray list.xlsx'){
   
   
   # Get village-specific spray status
-  village_df$status <- NA
-  for (i in 1:nrow(spray_status)){
-    this_cluster <- spray_status$cluster[i]
-    this_spray_status <- spray_status$status[i]
-    these_villages <- unlist(lapply(strsplit(spray_status$village_code[i], split = ','), as.numeric))
-    village_df$status[village_df$village_number %in% these_villages] <- this_spray_status
+  spray_village <- 
+    census %>% 
+    group_by(village_number) %>%
+    tally %>%
+    dplyr::select(-n) %>%
+    mutate(cluster = NA,
+           status = NA)
+  for (i in 1:nrow(spray_village)){
+    this_village_number <- spray_village$village_number[i]
+    right_row <- spray_status[grepl(this_village_number, spray_status$village_code),]
+    if(nrow(right_row) == 1){
+      spray_village$cluster[i] <- right_row$cluster
+      spray_village$status[i] <- right_row$status
+    }
   }
+  
+  # Clean up and assign
+  spray_status <- 
+    spray_status %>% 
+    dplyr::select(cluster, status)
   assign('spray_status',
-         spray_status,
-         envir = .GlobalEnv)
-  assign('village_df',
-         village_df,
+        spray_status,
+        envir = .GlobalEnv)
+  
+  assign('spray_village',
+         spray_village,
          envir = .GlobalEnv)
 }
