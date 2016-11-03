@@ -311,7 +311,7 @@ children <-
 
 This document contains maps and tables pertaining to the (cleaned) Mopeia trial data. Its purpose is to explain the methods used for buffering, as well as provide visualizations and tables useful for the designation of spray / no-spray zones and study participant selection. 
 
-It was produced the morning (GMT +2) of Tuesday, November 1st, 2016. It uses data sent from Charfudin Sacoor to Joe Brew on the evening of Sunday, October 30th, 2016 (`Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.xlsx`).
+It was produced the morning (GMT +2) of Thursday, November 3rd, 2016. It uses data sent from Charfudin Sacoor to Joe Brew on the evening of Sunday, October 30th, 2016 (`Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.xlsx`).
 
 # Methods
 
@@ -662,6 +662,13 @@ children <- children %>%
                 gender,
                 keeper,
                 status)
+# Get buffer status
+children <-
+  left_join(children,
+            census_spatial_ll@data %>%
+              dplyr::select(house_number,
+                            buffer)) %>%
+  rename(buffer_status = buffer)
 ```
 
 ## Children table at child level
