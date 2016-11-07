@@ -1,0 +1,345 @@
+---
+title: "Quality check"
+author: "Orvahlo Augusto, Joe Brew, Carlos Chaccour, Edgar Jamisse, Charfudin Sacoor, Francisco Saute"
+fig_width: 4
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+fig_height: 2.6
+---
+```{r, echo = FALSE, warning = FALSE, message = FALSE, comment = NA, error= FALSE, cache = FALSE}
+# No scientific notation
+options(scipen=999)
+
+# Packages 
+library(xtable)
+library(knitr)
+library(ggplot2) 
+# library(dplyr)
+library(rgeos)
+library(RColorBrewer)
+library(Rmisc)
+# Libraries
+library(rgdal)
+library(raster)
+library(sp)
+library(leaflet)
+library(ggmap)
+library(readxl)
+library(dplyr)
+library(readr)
+library(geosphere)
+
+# Basic knitr options
+opts_chunk$set(comment = NA, 
+               echo = FALSE, 
+               warning = FALSE, 
+               message = FALSE, 
+               error = TRUE, # Render report, even with errors
+               cache = F)
+
+# Helpers
+source('lib/get_zambezia.R')
+source('lib/helpers.R')
+```
+
+```{r setup, include=FALSE, echo = FALSE}
+library(knitr)
+knit_engines$set(asis = function(options) {
+  if (options$echo && options$eval) knit_child(text = options$code)
+})
+```
+
+
+```{r}
+#### READ IN AND CLEAN UP DATA
+
+# Read in final dataset, as given by Orvahlo on October 24, 2016
+# census <- read_excel('Limpesa_Final__241016_For maps.xlsx')
+# Read in corrected final dataset, sent by Edgar on October 30, 2016
+# census <- read_excel('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.xls')
+census <- read_csv('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.csv')
+# Fix weird header
+names(census)[6] <- 'locality_Final'
+
+# Get more nicely named geographic coordinate column names
+census$lat <- census$y <- census$latitude <- census$gpc_lat
+census$lon <- census$lng <- census$longitude <-census$x <- census$gpc_lng
+
+# Get a shapefile for Mozambique
+moz <- raster::getData('GADM', country = 'MOZ', level = 3)
+moz2 <- raster::getData('GADM', country = 'MOZ', level = 2)
+
+# GET CORRECT FINAL COLUMNS, AS EXPLAINED IN EMAIL
+# Get a village number
+census$village_number <- census$`village number_final`
+census$administrative_post <- census$administrative_post_final
+census$house_number <- census$houseno_Final_1
+census$locality <- census$locality_Final
+
+# Convert village number to numeric
+census$village_number <- 
+  as.numeric(as.character(census$village_number))
+
+# Remove all NA rows
+census <- census %>%
+  filter(!is.na(lng),
+         !is.na(lat),
+         !is.na(village_number),
+         !is.na(house_number))
+
+
+# Save old version of census
+census_old <- census
+
+# Create a spatial version of census
+census_spatial <- census
+coordinates(census_spatial) <- ~x+y
+proj4string(census_spatial) <- proj4string(moz)
+
+# Subset the shapefile just to Zambezia
+zam <- moz[moz@data$NAME_1 == 'Zambezia',]
+
+# Subset further to just Mopeia
+mop <- moz2[moz2@data$NAME_2 == 'Mopeia',]
+
+# Save the original proj4string
+original_proj4string <- proj4string(moz)
+
+# Prepare ggmap-compatible objects
+zam_fortified <- fortify(zam, id = ID_3)
+mop_fortified <- fortify(mop, id = ID_3)
+zam_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+                               lat = mean(census$lat, na.rm = TRUE)),
+                  maptype = 'satellite')
+mop_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+                               lat = mean(census$lat, na.rm = TRUE)),
+                  maptype = 'satellite')
+
+# Switch to a projected format
+# Project
+census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
+mop <- spTransform(mop, CRS("+init=epsg:3347"))
+# Later, we can switch back to lat/long:
+census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
+mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
+# proj4string(mop_ll) <- proj4string(zam)
+```
+
+```{r}
+# Read in data at the child-specific level
+children <- read_csv('redcap/CensusMopeia_DATA_2016-11-01_1734.csv')
+
+# Keep only those households with children
+children <- 
+  children %>%
+  filter(!is.na(perm_id_final)) %>%
+  mutate(permid = perm_id_final) %>%
+  dplyr::select(-perm_id_final)
+
+# Keep only those children which appear in the non-problematic census records
+children <-
+  children %>%
+  filter(parent_auri %in% census$uri) 
+
+# Keep only the columns of interest
+children <- 
+  children %>%
+  dplyr::select(permid,
+                dob,
+                name,
+                gender,
+                keeper,
+                parent_auri)
+
+# Get the household id
+children <-
+  children %>%
+  left_join(census %>% 
+              dplyr::select(house_number,
+                            village_number,
+                            uri),
+            by = c('parent_auri' = 'uri'))
+```
+
+
+```{r}
+if('clean_maps_with_buffers_data.RData' %in% dir()){
+  load('clean_maps_with_buffers_data.RData')
+} else {
+  # Get spray status (will use for clusters too)
+  get_spray_status() # produces spray_village (village level) and spray_status (cluster level)
+  
+  # Make a dataframe of just villages (with cluster assignments)
+  village_df <- make_village_df(census = census,
+                                spray_village = spray_village)
+  
+  # Get a distance matrix (takes 2-3 minutes)
+  distance_matrix <- get_distance_matrix(spatial_ll_census = census_spatial_ll)
+  
+  # Identify problems
+  identify_problems()
+  census$problematic <- census$house_number %in% incorrect_houses
+  census_spatial$problematic <- census_spatial$house_number %in% incorrect_houses
+  census_spatial_ll$problematic <- census_spatial_ll$house_number %in% incorrect_houses
+  
+  # SUBSET TO REMOVE PROBLEMATIC
+  # Get distance matrix after subset
+  distance_matrix_old <- distance_matrix
+  distance_matrix <- distance_matrix[!census$problematic,
+                                         !census$problematic]
+  
+  # Identify the nearest neighbors of each house
+  nn <- nearest_neighbor(census_spatial_ll = census_spatial_ll,
+                             distance_matrix_old = distance_matrix_old,
+                             n = 5)
+  census$nearest_neighbors <- nn
+  census_old$nearest_neighbors <- nn
+  census_spatial$nearest_neighbors <- nn
+  census_spatial_ll$nearest_neighbors <- nn
+  
+  # Remove incorrect houses
+  census <- census[which(!census$house_number %in% incorrect_houses),]
+  census_spatial <- census_spatial[which(!census_spatial$house_number %in% incorrect_houses),]
+  census_spatial_ll <- census_spatial_ll[which(!census_spatial_ll$house_number %in% incorrect_houses),]
+  
+  village_df <- village_df %>% filter(!is.na(village_number),
+                                      !duplicated(village_number))
+
+  # Join spray status to objects
+  joiner <- 
+    village_df %>%
+                dplyr::select(village_number, cluster, status)
+  
+  census_spatial_ll@data <-
+    left_join(census_spatial_ll@data,
+              joiner,
+              by = 'village_number')
+  census_spatial@data <-
+    left_join(census_spatial@data,
+              joiner,
+              by = 'village_number')
+  census <-
+    left_join(census,
+              joiner,
+              by = 'village_number')
+  
+  # Get the voronoi tesselation surface
+  vv <- voronoi(spatial_census_ll = census_spatial_ll)
+  # Get the voronoi tesselation surface at the level of the spray zones
+  vv_spray <- voronoi_spray_level(spatial_census_ll = census_spatial_ll)
+  
+  # Get a non lat long version of voronoi surface
+  # For the village level
+  proj4string(vv) <- proj4string(census_spatial_ll)
+  vv_ll <- vv
+  vv <- sp::spTransform(vv, CRSobj = proj4string(census_spatial))
+  
+  # For the spray-level
+  proj4string(vv_spray) <- proj4string(census_spatial_ll)
+  vv_spray_ll <- vv_spray
+  vv_spray <- sp::spTransform(vv_spray, CRSobj = proj4string(census_spatial))
+    
+  # Get the buffered voronoi tesselation surface
+  vvb <- rgeos::gBuffer(vv,  # village level
+                        byid = TRUE, 
+                        id = vv$village_number,
+                        width = -1000)
+  vvb_spray <- rgeos::gBuffer(vv_spray,  # village level
+                        byid = TRUE, 
+                        id = vv$status,
+                        width = -1000)
+  
+  # Convert back to lat lon
+  vvb_ll <- spTransform(vvb, CRSobj = proj4string(census_spatial_ll))
+  vvb_ll_spray <- spTransform(vvb_spray, CRSobj = proj4string(census_spatial_ll))
+  
+  # Identify buffers voronoi
+  census_spatial_ll <- 
+    identify_buffers_voronoi(
+    census_spatial_ll = census_spatial_ll,
+           distance_matrix = distance_matrix,
+           vvb_ll = vvb_ll)
+  
+  # Identify buffers voronoi at spray level
+  census_spatial_ll <- 
+    identify_buffers_voronoi_spray_level(census_spatial_ll = census_spatial_ll,
+           distance_matrix = distance_matrix,
+           vvb_ll_spray = vvb_ll_spray)
+  
+  # Get buffers through distance to other villages
+  census_spatial_ll <- identify_buffers(spatial_ll_census = census_spatial_ll,
+                       distances = distance_matrix)
+  
+  # Update other objects with variables only in census_spatial_ll
+  update_other_objects()
+
+  # Save
+  save.image('clean_maps_with_buffers_data.RData')  
+}
+
+
+# Set all NA statuses to FALSE
+census$status[is.na(census$status)] <- FALSE
+census_spatial$status[is.na(census_spatial$status)] <- FALSE
+census_spatial_ll$status[is.na(census_spatial_ll$status)] <- FALSE
+village_df$status[is.na(village_df$status)] <- FALSE
+
+# Resource helpers
+source('lib/helpers.R')
+
+# Get children's spray status
+children <- 
+  left_join(children,
+            census %>% 
+              dplyr::select(uri,
+                            status),
+            by = c('parent_auri' = 'uri'))
+# Remove those with no spray status
+children <- 
+  children %>%
+  filter(!is.na(status))
+```
+
+```{r}
+# Read in the manual data sent from Edgar
+random_check <- read_excel('Random sheck.xlsx', skip = 2)
+# Read in the data from the app
+library(gsheet)
+url_app <- 'https://docs.google.com/spreadsheets/d/10M9X1BRLyFc2dTnyx1uax5V92Y-o8NHirX3i_fd0Qoo/edit?usp=sharing'
+app_check <- gsheet2tbl(url_app)
+```
+
+# Reconciliation of app and assignment data
+
+```{r}
+x <- left_join(app_check %>%
+                 dplyr::select(-Timestamp),
+               y = census_spatial_ll@data %>% 
+                 dplyr::select(house_number,
+                               status,
+                               within_1k_voronoi_buffer_spray) %>%
+                 mutate(status= ifelse(status, 'Sprayed', 'Not sprayed')),
+               by = c('House.number' = 'house_number')) %>%
+  dplyr::mutate(reconciliation = ifelse(is.na(status),
+                                        'House removed algorithmically',
+                                        ifelse(status == Spray.status,
+                                        'okay',
+                                        'problem'))) %>%
+  rename(assignment = status,
+         reality = Spray.status)
+
+DT::datatable(x)
+```
+
+# Reconciliation of emailed and assignment data
+
+Currently not possible due to lack of house numbers.
+
+```{r}
+DT::datatable(random_check)
+```
