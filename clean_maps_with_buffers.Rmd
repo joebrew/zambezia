@@ -63,6 +63,7 @@ knit_engines$set(asis = function(options) {
 # Read in corrected final dataset, sent by Edgar on October 30, 2016
 # census <- read_excel('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.xls')
 census <- read_csv('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.csv')
+# census <- read_csv('CensusMopeia_DATA_2016-11-11_1355.csv')
 # Fix weird header
 names(census)[6] <- 'locality_Final'
 
@@ -85,6 +86,28 @@ census$locality <- census$locality_Final
 census$village_number <- 
   as.numeric(as.character(census$village_number))
 
+# Get the corrected locality and bairro names sent by edgar on nov 7
+locality_corrections <- read_excel('Mapa Actualizado de bairros Censados_07_11-2016_Edgar-Revisao_FIN.xlsx', skip = 2)
+
+# Join to the census
+x <- 
+  census %>%
+  left_join(locality_corrections,
+            by = c('village_number' = 'CODIGO')) %>%
+  mutate(BAIRRO = toupper(BAIRRO))
+# Make updates
+x <- x %>%
+  mutate(administrative_post = 
+           ifelse(administrative_post != `POSTO ADMIN` & !is.na(`POSTO ADMIN`), 
+                  `POSTO ADMIN`, administrative_post),
+         locality = ifelse(locality != LOCALIDADE & !is.na(LOCALIDADE), 
+                           LOCALIDADE, locality),
+         local_village_name = ifelse(local_village_name != BAIRRO & !is.na(BAIRRO),
+                         BAIRRO, local_village_name)) %>%
+  dplyr::select(-`POSTO ADMIN`, LOCALIDADE, BAIRRO)
+# Overwite census
+census <- x
+rm(x)
 # Remove all NA rows
 census <- census %>%
   filter(!is.na(lng),
@@ -586,15 +609,19 @@ master_table <-
 master_table <- master_table[,unique(c('house_number', 
                          'village_number', 
                          'village_name',
+                         'administrative_post',
+                         'locality',
+                         'cluster',
+                         'head_name',
                          'number_of_children',
                          # 'problematic', 
                          # 'nearest_neighbors',
                          'buffer_status',
-                         'cluster',
                          'spray_status'))
                          # 'lng',
                          # 'lat'                         ))
                          ]
+
 write_csv(master_table, 'household_table.csv')
 names(master_table) <- toupper(gsub('_', ' ', names(master_table)))
 DT::datatable(master_table)
@@ -677,4 +704,19 @@ The below table has one row for each eligible child. The `random_id` field shoul
 ```{r}
 DT::datatable(children)
 write_csv(children, 'children_table_at_child_level.csv')
+```
+
+```{r}
+# Master table for carlos
+# Get number of eligible children
+right <- 
+  children %>%
+  group_by(house_number) %>%
+  summarise(eligible_children = length(which(!buffer_status)),
+            ineligible_children = length(which(buffer_status)),
+            children = n())
+master_table <- 
+  master_table %>%
+  left_join(right)
+write_csv(master_table, '~/Desktop/table_for_carlos.csv')
 ```

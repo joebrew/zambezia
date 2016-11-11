@@ -482,7 +482,7 @@ leaflet_village <- function(i){
       
       ll <- 
         leaflet() %>%
-        addProviderTiles("OpenStreetMap.Mapnik") %>%
+        addProviderTiles("Esri.WorldImagery") %>%
         addCircleMarkers(lng = the_data$lng,
                          lat = the_data$lat,
                          color = colors,

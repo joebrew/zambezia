@@ -336,10 +336,3 @@ x <- left_join(app_check %>%
 DT::datatable(x)
 ```
 
-# Reconciliation of emailed and assignment data
-
-Currently not possible due to lack of house numbers.
-
-```{r}
-DT::datatable(random_check)
-```
