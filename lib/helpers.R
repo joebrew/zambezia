@@ -1181,7 +1181,8 @@ get_spray_status <- function(spray_file = 'Final spray no spray list.xlsx'){
            status = NA)
   for (i in 1:nrow(spray_village)){
     this_village_number <- spray_village$village_number[i]
-    right_row <- spray_status[grepl(this_village_number, spray_status$village_code),]
+    right_row <- spray_status[unlist(lapply(strsplit(x = spray_status$village_code, split = ','), function(x){this_village_number %in% as.numeric(unlist(x))})),]
+    message(nrow(right_row))
     if(nrow(right_row) == 1){
       spray_village$cluster[i] <- right_row$cluster
       spray_village$status[i] <- right_row$status

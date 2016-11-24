@@ -1,0 +1,969 @@
+---
+title: "Cluster selection: distance to health posts and other issues of concern"
+author: "Joe Brew"
+fig_width: 4
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+fig_height: 2.6
+---
+```{r, echo = FALSE, warning = FALSE, message = FALSE, comment = NA, error= FALSE, cache = FALSE}
+# No scientific notation
+options(scipen=999)
+
+# Packages 
+library(xtable)
+library(knitr)
+library(ggplot2) 
+# library(dplyr)
+library(rgeos)
+library(RColorBrewer)
+library(Rmisc)
+# Libraries
+library(rgdal)
+library(raster)
+library(sp)
+library(leaflet)
+library(ggmap)
+library(readxl)
+library(dplyr)
+library(readr)
+library(geosphere)
+
+# Basic knitr options
+opts_chunk$set(comment = NA, 
+               echo = FALSE, 
+               warning = FALSE, 
+               message = FALSE, 
+               error = TRUE, # Render report, even with errors
+               cache = F)
+
+# Helpers
+source('lib/get_zambezia.R')
+source('lib/helpers.R')
+```
+
+```{r setup, include=FALSE, echo = FALSE}
+library(knitr)
+knit_engines$set(asis = function(options) {
+  if (options$echo && options$eval) knit_child(text = options$code)
+})
+```
+
+
+```{r}
+#### READ IN AND CLEAN UP DATA
+
+# Read in final dataset, as given by Orvahlo on October 24, 2016
+# census <- read_excel('Limpesa_Final__241016_For maps.xlsx')
+# Read in corrected final dataset, sent by Edgar on October 30, 2016
+# census <- read_csv('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.csv')
+
+census <- read_csv('redcap/CensusMopeia_DATA_2016-11-01_1734.csv')
+
+# Divide between children and census
+census$child <- census$redcap_event_name == 'census_mopeia_chil_arm_1'
+children <- census %>% filter(child)
+census <-
+  census %>% filter(!child)
+
+# Fix weird header
+names(census)[6] <- 'locality_Final'
+
+# Get more nicely named geographic coordinate column names
+census$lat <- census$y <- census$latitude <- census$gpc_lat
+census$lon <- census$lng <- census$longitude <-census$x <- census$gpc_lng
+
+# Get a shapefile for Mozambique
+moz <- raster::getData('GADM', country = 'MOZ', level = 3)
+moz2 <- raster::getData('GADM', country = 'MOZ', level = 2)
+
+# GET CORRECT FINAL COLUMNS, AS EXPLAINED IN EMAIL
+census$house_number <- census$houseno_final
+census$permid <- census$perm_id_final
+census$village_number <-
+  unlist(lapply(strsplit(census$house_number, split = '-'), function(x){x[2]}))
+
+# Convert village number to numeric
+census$village_number <- 
+  as.numeric(as.character(census$village_number))
+
+# Keep only necessary vars in children
+children <- 
+  children %>%
+  dplyr::select(parent_auri,
+                permid,
+                name:children_info_complete)
+
+# Keep only necessary info in census
+census <- census %>%
+  dplyr::select(uri:family_id,
+                latitude:village_number)
+
+# Clean up geography
+census$x <- census$lng <- census$gpc_lng
+census$y <- census$lat <- census$gpc_lat
+
+# Remove all NA rows
+census <- census %>%
+  filter(!is.na(lng),
+         !is.na(lat),
+         !is.na(village_number),
+         !is.na(house_number))
+
+
+# Save old version of census
+census_old <- census
+
+# Create a spatial version of census
+census_spatial <- census
+coordinates(census_spatial) <- ~x+y
+proj4string(census_spatial) <- proj4string(moz)
+
+# Subset the shapefile just to Zambezia
+zam <- moz[moz@data$NAME_1 == 'Zambezia',]
+
+# Subset further to just Mopeia
+mop <- moz2[moz2@data$NAME_2 == 'Mopeia',]
+
+# Save the original proj4string
+original_proj4string <- proj4string(moz)
+
+# Prepare ggmap-compatible objects
+zam_fortified <- fortify(zam, id = ID_3)
+mop_fortified <- fortify(mop, id = ID_3)
+zam_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+                               lat = mean(census$lat, na.rm = TRUE)),
+                  maptype = 'satellite')
+mop_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+                               lat = mean(census$lat, na.rm = TRUE)),
+                  maptype = 'satellite')
+
+# Switch to a projected format
+# Project
+census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
+mop <- spTransform(mop, CRS("+init=epsg:3347"))
+# Later, we can switch back to lat/long:
+census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
+mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
+# proj4string(mop_ll) <- proj4string(zam)
+```
+
+```{r}
+# Read in data at the child-specific level
+# children <- read_csv('redcap/CensusMopeia_DATA_2016-11-01_1734.csv')
+
+# Keep only those children which appear in the non-problematic census records
+children <-
+  children %>%
+  filter(parent_auri %in% census$uri) 
+
+# Keep only the columns of interest
+children <- 
+  children %>%
+  dplyr::select(permid,
+                dob,
+                name,
+                gender,
+                keeper,
+                parent_auri)
+
+# Get the household id
+children <-
+  children %>%
+  left_join(census %>% 
+              dplyr::select(house_number,
+                            village_number,
+                            uri),
+            by = c('parent_auri' = 'uri'))
+```
+
+
+```{r}
+if('clean_maps_with_buffers_data.RData' %in% dir()){
+  load('clean_maps_with_buffers_data.RData')
+} else {
+  # Get spray status (will use for clusters too)
+  get_spray_status() # produces spray_village (village level) and spray_status (cluster level)
+  
+  # Make a dataframe of just villages (with cluster assignments)
+  village_df <- make_village_df(census = census,
+                                spray_village = spray_village)
+  
+  # Get a distance matrix (takes 2-3 minutes)
+  distance_matrix <- get_distance_matrix(spatial_ll_census = census_spatial_ll)
+  
+  # Identify problems
+  identify_problems()
+  census$problematic <- census$house_number %in% incorrect_houses
+  census_spatial$problematic <- census_spatial$house_number %in% incorrect_houses
+  census_spatial_ll$problematic <- census_spatial_ll$house_number %in% incorrect_houses
+  
+  # SUBSET TO REMOVE PROBLEMATIC
+  # Get distance matrix after subset
+  distance_matrix_old <- distance_matrix
+  distance_matrix <- distance_matrix[!census$problematic,
+                                         !census$problematic]
+  
+  # Identify the nearest neighbors of each house
+  nn <- nearest_neighbor(census_spatial_ll = census_spatial_ll,
+                             distance_matrix_old = distance_matrix_old,
+                             n = 5)
+  census$nearest_neighbors <- nn
+  census_old$nearest_neighbors <- nn
+  census_spatial$nearest_neighbors <- nn
+  census_spatial_ll$nearest_neighbors <- nn
+  
+  # Remove incorrect houses
+  census <- census[which(!census$house_number %in% incorrect_houses),]
+  census_spatial <- census_spatial[which(!census_spatial$house_number %in% incorrect_houses),]
+  census_spatial_ll <- census_spatial_ll[which(!census_spatial_ll$house_number %in% incorrect_houses),]
+  
+  village_df <- village_df %>% filter(!is.na(village_number),
+                                      !duplicated(village_number))
+
+  # Join spray status to objects
+  joiner <- 
+    village_df %>%
+                dplyr::select(village_number, cluster, status)
+  
+  census_spatial_ll@data <-
+    left_join(census_spatial_ll@data,
+              joiner,
+              by = 'village_number')
+  census_spatial@data <-
+    left_join(census_spatial@data,
+              joiner,
+              by = 'village_number')
+  census <-
+    left_join(census,
+              joiner,
+              by = 'village_number')
+  
+  # Get the voronoi tesselation surface
+  vv <- voronoi(spatial_census_ll = census_spatial_ll)
+  # Get the voronoi tesselation surface at the level of the spray zones
+  vv_spray <- voronoi_spray_level(spatial_census_ll = census_spatial_ll)
+  
+  # Get a non lat long version of voronoi surface
+  # For the village level
+  proj4string(vv) <- proj4string(census_spatial_ll)
+  vv_ll <- vv
+  vv <- sp::spTransform(vv, CRSobj = proj4string(census_spatial))
+  
+  # For the spray-level
+  proj4string(vv_spray) <- proj4string(census_spatial_ll)
+  vv_spray_ll <- vv_spray
+  vv_spray <- sp::spTransform(vv_spray, CRSobj = proj4string(census_spatial))
+    
+  # Get the buffered voronoi tesselation surface
+  vvb <- rgeos::gBuffer(vv,  # village level
+                        byid = TRUE, 
+                        id = vv$village_number,
+                        width = -1000)
+  vvb_spray <- rgeos::gBuffer(vv_spray,  # village level
+                        byid = TRUE, 
+                        id = vv$status,
+                        width = -1000)
+  
+  # Convert back to lat lon
+  vvb_ll <- spTransform(vvb, CRSobj = proj4string(census_spatial_ll))
+  vvb_ll_spray <- spTransform(vvb_spray, CRSobj = proj4string(census_spatial_ll))
+  
+  # Identify buffers voronoi
+  census_spatial_ll <- 
+    identify_buffers_voronoi(
+    census_spatial_ll = census_spatial_ll,
+           distance_matrix = distance_matrix,
+           vvb_ll = vvb_ll)
+  
+  # Identify buffers voronoi at spray level
+  census_spatial_ll <- 
+    identify_buffers_voronoi_spray_level(census_spatial_ll = census_spatial_ll,
+           distance_matrix = distance_matrix,
+           vvb_ll_spray = vvb_ll_spray)
+  
+  # Get buffers through distance to other villages
+  census_spatial_ll <- identify_buffers(spatial_ll_census = census_spatial_ll,
+                       distances = distance_matrix)
+  
+  # Update other objects with variables only in census_spatial_ll
+  update_other_objects()
+
+  # Save
+  save.image('clean_maps_with_buffers_data.RData')  
+}
+
+
+# Set all NA statuses to FALSE
+census$status[is.na(census$status)] <- FALSE
+census_spatial$status[is.na(census_spatial$status)] <- FALSE
+census_spatial_ll$status[is.na(census_spatial_ll$status)] <- FALSE
+village_df$status[is.na(village_df$status)] <- FALSE
+
+# Resource helpers
+source('lib/helpers.R')
+
+# Get children's spray status
+children <- 
+  left_join(children,
+            census %>% 
+              dplyr::select(uri,
+                            status),
+            by = c('parent_auri' = 'uri'))
+# Remove those with no spray status
+children <- 
+  children %>%
+  filter(!is.na(status))
+```
+
+```{r}
+# Read in the coordinates of health centers
+us <- read.csv('unidades_sanitarias_cleaned.csv')
+# Make spatial
+us$x <- us$lng <- us$lon <- us$longitude <- us$gpc_lng
+us$y <- us$lat <- us$latitude <- us$gpc_lat
+coordinates(us) <- ~gpc_lng+gpc_lat
+```
+
+# Health facility locations
+
+## Table
+
+The below table shows the coordinates, localidades and postos administrativos of the 12 health facilities in Mopeia.
+
+```{r}
+x <- us@data
+x <- x %>% dplyr::select(health_facility,
+                         loc_health_facility,
+                         pos_adm_health_facility,
+                         lng,
+                         lat)
+x$lng <- round(x$lng, 4)
+x$lat <- round(x$lat, 4)
+names(x) <- c('Facility', 'Localidade', 'Posto Adm.', 'Lng', 'Lat')
+DT::datatable(x)
+rm(x)
+```
+
+## Map
+
+The below map shows the locations of each health facility. Clicking on the blue markers reveals the name of each health facility.
+
+```{r}
+
+leaflet(data = us@data) %>%
+  addProviderTiles('OpenStreetMap.BlackAndWhite') %>%
+  addMarkers(~lng,
+             ~lat,
+             popup = ~health_facility) %>%
+  addPolygons(data = mop_ll, stroke = FALSE, color = 'red') 
+
+```
+
+# Cluster locations
+
+```{r}
+# Get clusters
+clusters <-
+  census_spatial_ll@data %>%
+  group_by(cluster) %>%
+  summarise(lng = mean(lng),
+            lat = mean(lat),
+            spray_status = first(status),
+            houses = n(),
+            houses_core = length(which(!within_1k_voronoi_buffer_spray)),
+            houses_buffer = length(which(within_1k_voronoi_buffer_spray)),
+            children = sum(number_of_children),
+            children_core = sum(number_of_children[!within_1k_voronoi_buffer_spray]),
+            children_buffer = sum(number_of_children[within_1k_voronoi_buffer_spray]),
+            villages = length(unique(village_number)),
+            village_numbers = paste0(sort(unique(village_number)), collapse = ', ')) %>%
+  filter(!is.na(cluster)) %>%
+  mutate(spray_status = ifelse(spray_status, 'Spray', 'No spray'))
+```
+
+## Table
+
+The below table shows the centroid of each cluster, along with some descriptive information regarding the inhabitants.
+
+```{r}
+DT::datatable(clusters %>%
+                mutate(lng = round(lng, 3),
+                       lat = round(lat, 3)))
+```
+
+## Map
+
+The below map shows each cluster's centroid (circles) along with each health facility (pins). Both pins and circles reveal their identity when clicked.
+
+```{r}
+leaflet() %>%
+  addProviderTiles('OpenStreetMap.BlackAndWhite') %>%   
+  addPolygons(data = mop_ll, stroke = FALSE, color = 'red') %>%
+  addMarkers(data = us@data,
+             ~lng,
+             ~lat,
+             popup = ~health_facility) %>%
+  addCircleMarkers(data = clusters,
+                   lng = clusters$lng,
+                   lat = clusters$lat,
+                   color = 'darkgreen',
+                   fillOpacity = 0.8,
+                   radius = 3,
+                   opacity = 0,
+                   popup = as.character(clusters$cluster))
+```
+
+
+## Distance calculations
+
+First, we need to calculate the distance in kilometers between each clusters' centroid and each health post, in order to get the nearest health post. We do this using Levenstein "great-circle" distance. Note, this does not take into account travel times, roads, or geographical barriers such as rivers.
+
+```{r}
+clusters_sp <- clusters
+clusters_sp$x <- clusters_sp$lng
+clusters_sp$y <- clusters_sp$lat
+coordinates(clusters_sp) <- ~x+y
+proj4string(clusters_sp) <- proj4string(us) <- proj4string(census_spatial_ll)
+us_distances <- geosphere::distm(x = us,
+                              y = clusters_sp, 
+                              fun = distVincentySphere)
+# Get which is the closest
+clusters$closest_health_facility <-
+  apply(us_distances, 2, function(x){
+    us$health_facility[which.min(x)]
+  })
+# Get distance
+clusters$km_to_closest_health_facility <-
+  apply(us_distances, 2, function(x){
+    min(x) / 1000
+  })
+
+# FOR US, get distance from noere
+distance_from_noere <- 
+  geosphere::distm(x = us,
+                   y = us[grepl('NOERE', us@data$health_facility),])
+us$km_from_noere <- as.numeric(distance_from_noere / 1000)
+# Arrange by distance from noere, so that we appropriately keep clusters together
+us <- us[order(us@data$km_from_noere),]
+```
+
+What follows is a table of each cluster, its nearest health facility, and the distance in kilometers between that health facility and the cluster centroid.
+
+```{r}
+DT::datatable(clusters %>%
+                dplyr::select(cluster,
+                              closest_health_facility,
+                              km_to_closest_health_facility) %>%
+                arrange(desc(km_to_closest_health_facility)))
+```
+
+Distance between cluster centroids and their respective nearest health posts vary widely. The below histogram shows the distribution in distance (kilometers) to each centroids' nearest health post.
+
+```{r}
+ggplot(data = clusters,
+       aes(x = km_to_closest_health_facility)) +
+  geom_histogram(alpha = 0.6, fill = 'darkgreen') +
+  theme_get() +
+  xlab('Kilometers') +
+  ylab('Clusters') +
+  ggtitle('Distance from cluster centroid to nearest health post')
+nearest_95 <- as.numeric(round(quantile(clusters$km_to_closest_health_facility, 0.95), digits = 2))
+```
+
+95% of all clusters are within `r nearest_95` kilometers. Therefore, for logstical purposes, we will eliminate those 25% which are beyond that distance.
+
+```{r}
+clusters <- clusters %>%
+  mutate(remove = km_to_closest_health_facility > nearest_95)
+
+clusters_sp@data <- left_join(clusters_sp@data,
+                              clusters)
+```
+
+Following elimination, our remaining clusters and health posts look like this. Points in red are clusters which are not eligible for selection (ie, they are removed), due to the far distance from a health post.
+
+```{r}
+remove_these <- clusters %>% filter(remove)
+keep_these <- clusters %>% filter(!remove)
+leaflet() %>%
+  addProviderTiles('OpenStreetMap.BlackAndWhite') %>%   
+  addPolygons(data = mop_ll, stroke = FALSE, color = 'red') %>%
+  addMarkers(data = us@data,
+             ~lng,
+             ~lat,
+             popup = ~health_facility) %>%
+  addCircleMarkers(data = remove_these,
+                   lng = remove_these$lng,
+                   lat = remove_these$lat,
+                   color = 'darkred',
+                   fillOpacity = 0.8,
+                   radius = 3,
+                   opacity = 0,
+                   popup = as.character(remove_these$cluster)) %>%
+  addCircleMarkers(data = keep_these,
+                   lng = keep_these$lng,
+                   lat = keep_these$lat,
+                   color = 'darkgreen',
+                   fillOpacity = 0.8,
+                   radius = 3,
+                   opacity = 0,
+                   popup = as.character(keep_these$cluster))
+```
+
+```{r}
+# Make the removals
+clusters <- clusters %>%
+  filter(!remove)
+
+clusters_sp <- clusters_sp[which(!clusters_sp$remove),]
+```
+
+# Random selection
+
+## Strata size
+
+Having eliminated the 25% of clusters which are furthest from their respective health posts, we carry out a random selection. We use terciles of number of houses to divide our remaining clusters into three sizes.
+
+```{r}
+cut_offs <- quantile(clusters$houses, probs = c(0, .33, .66, 1))
+strata <- base::cut(clusters$houses, breaks = c(0, cut_offs[2:3], Inf))
+clusters$strata <- strata
+clusters$size <- c('Small', 'Medium', 'Large')[as.numeric(clusters$strata)]
+```
+
+The cut-off points for each strata are:
+
+- Small: 0 to `r as.numeric(floor(cut_offs[2]))` houses.
+- Medium: `r as.numeric(ceiling(cut_offs[2]))` to `r as.numeric(floor(cut_offs[3]))` houses.
+- Large: `r as.numeric(floor(cut_offs[3]))` or more houses.
+
+We can visualize the distribution of clusters' numbers of houses below, along with lines indicating the cut points:
+
+```{r}
+ggplot(data = clusters,
+       aes(x = houses)) +
+  geom_density(aes(fill = size),
+    # fill = 'darkorange', 
+               alpha = 0.6, color = NA) +
+  geom_vline(xintercept = as.numeric(cut_offs),
+             color = 'darkred',
+             alpha = 0.7, 
+             lty = 3) +
+  xlab('Houses') +
+  ylab('Density') +
+  ggtitle('Distribution of number of houses',
+          'Cluster level') +
+  scale_fill_manual(name = 'Size',
+                    values = c('darkblue', 'red', 'darkorange'))
+```
+
+## Selection
+
+Ultimately, we need to select 86 clusters, stratified by size, and in equal number (43) between spray and no spray status. In other words, we want to select the below number of clusters:
+
+```{r}
+selector <- expand.grid(spray_status = c('Spray', 'No spray'),
+                        size = c('Small', 'Medium', 'Large'))
+selector$clusters <- c(rep(14, 4), rep(15, 2))
+selector
+```
+
+We do this randomly and get the following selections:
+
+```{r}
+set.seed(123)
+# re arrange
+clusters <- clusters[sample(1:nrow(clusters), nrow(clusters)),]
+# randomly select
+clusters$selected <- FALSE
+selector$counter <- 0
+for (i in 1:nrow(clusters)){
+  # Get the cluster in question
+  this_cluster <- clusters[i,]
+  # Ensure that the number isn't yet above the max
+  this_selector <- selector %>% 
+    filter(spray_status == this_cluster$spray_status,
+           size == this_cluster$size)
+  if(this_selector$counter >= this_selector$clusters){
+    message('Already reached max')
+    clusters$selected[i] <- FALSE
+  } else {
+    clusters$selected[i] <- TRUE
+    selector$counter[selector$spray_status == this_cluster$spray_status &
+                     selector$size == this_cluster$size] <- 
+      this_selector$counter +1
+  }
+}
+```
+
+```{r}
+cat(paste0(sort(unique(clusters$cluster[clusters$selected])), collapse = ', '))
+```
+
+Below is a table of all clusters, including both those selected and those not selected.
+
+```{r}
+DT::datatable(clusters %>%
+                dplyr::select(cluster,
+                              spray_status,
+                              size,
+                              selected) %>%
+  arrange(desc(selected, size, spray_status)))
+```
+
+# Assignation to health posts and workers
+
+Clusters will be grouped and assigned to workers. Where each worker will be based will the health post nearest to that workers' assigned clusters.
+
+
+## Segregation into sub-groups
+
+We divide our clusters into 7 groups of size 8 (for assignation to health facilities with 2 field workers), and 6 groups of size 5 (for assignation to health facilities with only 1 field worker). In order to do this, we group each (selected) cluster with the other clusters assigned to the same health facility, and begin the process. When there is "spill-over" (ie, the number of health facilities required to reach the necessary number of clusters for one group is multiple), we use nearby health facilities. In other words, one "group" might be assigned to multiple health facilities.
+
+```{r}
+ordered_clusters <- us@data %>%
+  dplyr::select(health_facility) %>%
+  left_join(clusters %>%
+              filter(selected) %>%
+              group_by(health_facility = closest_health_facility) %>%
+              mutate(dummy = 1)) %>%
+  filter(!is.na(cluster))
+
+# Placeholder for group assignation
+group_df <- 
+  expand.grid(group_number = 1:13,
+              counter = 1:8)
+group_df$remove <- FALSE
+group_df$remove[group_df$group_number > 7 &
+           group_df$counter > 5] <- TRUE
+group_df <- group_df[!group_df$remove,]
+group_df <- group_df %>%
+  dplyr::select(-remove) %>%
+  arrange(group_number)
+
+# Loop through each group to get an expanded one
+group_df <-
+  cbind(group_df,
+        ordered_clusters)
+
+# Get a number of clusters variable
+group_df <-
+  group_df %>%
+  group_by(group_number) %>%
+  mutate(n_clusters = max(counter)) %>%
+  # Keep only relevant variables
+  ungroup %>%
+  mutate(km = km_to_closest_health_facility) %>%
+  dplyr::select(group_number,
+                n_clusters,
+                health_facility,
+                cluster,
+                km)
+```
+
+The below table shows the assignations of each cluster to different "groups". The `n_clusters` variable refers tothe number of clusters assigned to that group. In the below table, there is one row for each cluster. The `health_facility` variable refers to the health facility which is nearest to that cluster. The `km` variable is the distance in (Levenstein) kilometers from the cluster's centroid to that health facility.
+
+```{r}
+DT::datatable(group_df %>%
+                mutate(km = round(km, digits = 2)))
+```
+
+What follows is a variation of the same table. Instead of showing one row per cluster, we now show one row per "group". The `clusters` variable is simply a listing of clusters. The `health_facilities` variable are those health facilities that this group should use as their "base". 
+
+```{r}
+x <- group_df %>%
+  group_by(group_number) %>%
+  summarise(n_clusters = mean(n_clusters),
+            clusters = paste0(sort(cluster), collapse = ', '),
+            health_facilities = paste0(unique(gsub('CENTRO DE SAUDE DE ', 
+                                                   '',
+                                                   health_facility)), collapse = ', '))
+```
+
+```{r}
+DT::datatable(x)
+```
+
+As previously mentioned, there are many cases of more than one health facility per group. This was necessary in order to get groups of appropriate size. If groups should only be based at one health facility, then they should use the first health facility listed only. 
+
+## Verification
+
+We need to check that the nearest health facilities to each cluster centroid correspond roughly with the `health_facility` field in the census data. This is because it may turn out that there are geographical obstacles which make our calculation of health facilities less than ideal.
+
+In order to do this, we simply compare the health facilities assigned by Levenstein distance with the field in the census.
+
+```{r}
+x <- group_df %>%
+              rename(health_facility_levenstein = health_facility) %>%
+  left_join(census_spatial_ll@data %>%
+  filter(!is.na(cluster)) %>%
+  group_by(cluster) %>%
+  summarise(health_facilities_from_census = paste0(unique(health_facility), collapse = ', ')), by = 'cluster')
+```
+
+The above table shows that there is rough concordance (ie, it's okay). In the census data, some houses from the same cluster are assigned to different health facilities (which is to be somewhat expected), but a manual examination of the above shows that nearly all clusters' Levenstein nearest health facility is among that cluster's assigned health facility per the census data.
+
+# Recruitment
+
+Each eligible cluster has been assigned a spray status and size, has been randomized into either "selected" (86 clusters) or not, and has been assigned to a "group" of field workers operating out of 1 or multiple health facilities. Each household within each selected cluster also is either in the "buffer" or "core", and may or may not have children.
+
+## Table
+
+For recruitment purposes, the following table is a list of only _eligible_ children from _eligible_ clusters, organized by group and health facility. Children living in the buffer zones have been removed. For each cluster, children are given a `random_id` which is a number between 1 and the number of (eligible) children in that cluster. This `random_id` should be used for recruitment (ie, the first child recruited should be number 1, then number 2, etc.).
+
+The table is organized by `group_number`, so as to be of operational use. 
+
+```{r}
+final <- 
+  children %>%
+  # Get census data
+  left_join(census_spatial_ll@data %>%
+              mutate(LOCALIDADE = locality_Final,
+                     BAIRRO = local_village_name) %>%
+              dplyr::select(uri,
+                            within_1k_voronoi_buffer_spray,
+                            cluster,
+                            LOCALIDADE,
+                            BAIRRO,
+                            lat,
+                            lng),
+            by = c('parent_auri' = 'uri')) %>%
+  # Get group data
+  left_join(group_df %>%
+              dplyr::select(cluster, health_facility, group_number),
+            by = 'cluster') %>%
+  filter(!within_1k_voronoi_buffer_spray) %>%
+  mutate(spray_status = ifelse(status, 'Spray', 'No spray')) %>%
+  dplyr::select(group_number, health_facility,
+                cluster,
+                village_number,
+                LOCALIDADE,
+                BAIRRO,
+                spray_status,
+                house_number, keeper,
+                name, dob, gender,
+                permid,
+                lng, lat) %>%
+  filter(!is.na(group_number))
+
+# Randomize order and give a selection number
+set.seed(639)
+final <- 
+  final %>%
+  mutate(dummy = 1) %>%
+  group_by(cluster) %>%
+  mutate(random_id = cumsum(dummy)) %>%
+  ungroup %>%
+  dplyr::select(-dummy)
+
+# Reorder
+final <- final %>%
+  arrange(group_number, cluster, random_id)
+
+# Make data frame
+final <- data.frame(final)
+
+# fix encoding
+classes <- as.character(unlist(lapply(final, class)))
+
+for (j in 1:ncol(final)){
+  if(classes[j] == 'factor'){
+    final[,j] <- as.character(final[,j])
+  }
+}
+
+for (j in 1:ncol(final)){
+  if(classes[j] %in% c('character', 'factor')){
+    final[,j] <-
+      iconv(final[,j], 'latin1', 'UTF-8')
+  }
+}
+
+DT::datatable(final)
+final <- data.frame(final)
+write_csv(final, 'final_recruitment_table_by_group.csv')
+```
+
+## Maps
+
+### Cluster / center maps
+
+What follows is a map which shows all selected locations, with color indicating the health facility to which the location is assigned. The big, hollow circles are health facilities (the health facility being located at the center of the circle), and the small dots are houses selected in the random sampling pertaining to a team based at that health facility. 
+
+Clicking on a dot reveals the house number; clicking on a circle reveals the health facility name.
+
+
+```{r}
+health_map <- function(){
+  # Define vector of facilities
+  health_facilities <- sort(unique(final$health_facility))
+  
+  # Define vector of colors
+  colors <- colorRampPalette(brewer.pal(9, 'Spectral'))(length(unique(us$health_facility)))
+  cols <- colors[as.numeric(factor(final$health_facility))]
+  # Make initial map
+  ll <- 
+    leaflet(data = final) %>%
+  addProviderTiles('Esri.WorldImagery') %>%
+  addCircleMarkers(~lng,
+             ~lat,
+             fillOpacity= 0.2,
+             opacity = 0,
+             popup = ~house_number,
+             color = cols,
+             radius = 3)
+  # Add the health facilities
+  new_cols <-  colors[as.numeric(factor(us$health_facility))]
+  ll <- ll %>%
+    addCircleMarkers(data = us,
+                     lng = us$lon,
+                     lat = us$lat,
+             fillOpacity= 0.3,
+             opacity = 1,
+             popup = us$health_facility,
+             color = new_cols,
+             radius = 7)
+  return(ll)
+  
+}
+health_map()
+```
+
+### Groups maps
+
+What follows is a series of maps, one for each "group". Each map contains the locations of the children/houses assigned for recruitment to that group.
+
+```{r}
+group_map <- function(number = 1,
+                      add_mop = FALSE){
+  the_colors <- colorRampPalette(brewer.pal(9, 'Spectral'))(13)
+  sub_data <- final %>%
+    filter(group_number == number)
+  sub_us <- us[us@data$health_facility %in% unique(sub_data$health_facility),]
+  
+  # Plot
+  ll <- 
+    leaflet(data = sub_us@data) %>%
+  addProviderTiles('Esri.WorldImagery') %>%
+  addMarkers(~lng,
+             ~lat,
+             popup = ~health_facility)
+  if(add_mop){
+    ll <- ll %>%
+      addPolygons(data = mop_ll, stroke = FALSE, color = 'red')
+  }
+  ll <- ll  %>%
+  addCircleMarkers(data = sub_data,
+                     ~lng,
+                     ~lat,
+                     popup = as.character(sub_data$house_number),
+                   radius = 3,
+                   opacity = 0,
+                   fillOpacity = 0.6,
+                   fillColor = the_colors[number]) %>%
+    addLegend(position = 'bottomright',
+              colors = the_colors[number],
+              labels = paste0('Group ', number))
+  return(ll)
+  
+}
+```
+
+
+
+
+#### Group 1
+
+```{r}
+group_map(1)
+```
+
+
+#### Group 2
+
+```{r}
+group_map(2)
+```
+
+
+#### Group 3
+
+```{r}
+group_map(3)
+```
+
+
+#### Group 4
+
+```{r}
+group_map(4)
+```
+
+
+#### Group 5
+
+```{r}
+group_map(5)
+```
+
+
+#### Group 6
+
+```{r}
+group_map(6)
+```
+
+
+#### Group 7
+
+```{r}
+group_map(7)
+```
+
+
+#### Group 8
+
+```{r}
+group_map(8)
+```
+
+
+#### Group 9
+
+```{r}
+group_map(9)
+```
+
+
+#### Group 10
+
+```{r}
+group_map(10)
+```
+
+
+#### Group 11
+
+```{r}
+group_map(11)
+```
+
+
+#### Group 12
+
+```{r}
+group_map(12)
+```
+
+
+#### Group 13
+
+```{r}
+group_map(13)
+```
