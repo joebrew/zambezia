@@ -55,7 +55,7 @@ knit_engines$set(asis = function(options) {
 ```
 
 
-```{r}
+```{r, message=FALSE}
 #### READ IN AND CLEAN UP DATA
 
 # Read in final dataset, as given by Orvahlo on October 24, 2016
@@ -387,6 +387,17 @@ clusters <-
   mutate(spray_status = ifelse(spray_status, 'Spray', 'No spray'))
 ```
 
+There were originally `r nrow(clusters)` clusters.
+
+```{r}
+# filter out < 22
+clusters <- clusters %>%
+  filter(children_core >= 22)
+```
+We filter out any cluster with fewer than 22 children, and are left with `r nrow(clusters)` clusters.
+
+
+
 ## Table
 
 The below table shows the centroid of each cluster, along with some descriptive information regarding the inhabitants.
@@ -473,14 +484,14 @@ ggplot(data = clusters,
   xlab('Kilometers') +
   ylab('Clusters') +
   ggtitle('Distance from cluster centroid to nearest health post')
-nearest_95 <- as.numeric(round(quantile(clusters$km_to_closest_health_facility, 0.95), digits = 2))
+nearest_97 <- as.numeric(round(quantile(clusters$km_to_closest_health_facility, 0.97), digits = 2))
 ```
 
-95% of all clusters are within `r nearest_95` kilometers. Therefore, for logstical purposes, we will eliminate those 25% which are beyond that distance.
+97% of all clusters are within `r nearest_97` kilometers. Therefore, for logstical purposes, we will eliminate those 3% which are beyond that distance.
 
 ```{r}
 clusters <- clusters %>%
-  mutate(remove = km_to_closest_health_facility > nearest_95)
+  mutate(remove = km_to_closest_health_facility > nearest_97)
 
 clusters_sp@data <- left_join(clusters_sp@data,
                               clusters)
@@ -524,6 +535,8 @@ clusters <- clusters %>%
 clusters_sp <- clusters_sp[which(!clusters_sp$remove),]
 ```
 
+Following elimination based on distance, the number of clusters eligible for selection goes down to `r nrow(clusters)`.
+
 # Random selection
 
 ## Strata size
@@ -565,7 +578,7 @@ ggplot(data = clusters,
 
 ## Selection
 
-Ultimately, we need to select 86 clusters, stratified by size, and in equal number (43) between spray and no spray status. In other words, we want to select the below number of clusters:
+Ultimately, we need to select 86 clusters, stratified by size, and health post, and in equal number (43) between spray and no spray status. In other words, we want to select the below number of clusters:
 
 ```{r}
 selector <- expand.grid(spray_status = c('Spray', 'No spray'),
@@ -573,6 +586,20 @@ selector <- expand.grid(spray_status = c('Spray', 'No spray'),
 selector$clusters <- c(rep(14, 4), rep(15, 2))
 selector
 ```
+
+Cluster assignment (and working groups) hinge on health facilities. Prior to selection, using the `r nrow(clusters)` which are eligible for selection, the number of clusters per health facility is as follows:
+
+```{r}
+x <- clusters %>%
+  group_by(health_facility = closest_health_facility) %>%
+  summarise(n_clusters = n(),
+            clusters = paste0(sort(cluster), collapse = ', ')) %>%
+  arrange(n_clusters)
+```
+
+As is apparent above, some health facilities have fewer than 5 associated eligible clusters. 
+
+We do an initial pass to ensure that all health facilities get at least 5 clusters (when possible) or if there are not 5 clusters belonging to that health facility, the number of clusters which are closest to that health facility (as low as 1). In a second pass, we randomly pick from the remaining clusters stratified by size and spray status.
 
 We do this randomly and get the following selections:
 
@@ -582,23 +609,40 @@ set.seed(123)
 clusters <- clusters[sample(1:nrow(clusters), nrow(clusters)),]
 # randomly select
 clusters$selected <- FALSE
-selector$counter <- 0
+# Assign as "selected" any cluster belonging to a health
+# facility with five or fewer clusters
+clusters <- 
+  clusters %>%
+  group_by(closest_health_facility) %>%
+  mutate(dummy = n()) %>%
+  ungroup %>%
+  mutate(selected = ifelse(dummy <= 5, TRUE, selected))
+
+# Since we've made an inital prior selection, add to the counters
+adjust_counter <-
+  clusters %>% 
+  filter(selected) %>% 
+  group_by(size, spray_status) %>% 
+  summarise(counter = n())
+# Join the adjustments to selector
+selector <- left_join(selector, adjust_counter)
+selector$counter[is.na(selector$counter)] <- 0
+
 for (i in 1:nrow(clusters)){
   # Get the cluster in question
   this_cluster <- clusters[i,]
   # Ensure that the number isn't yet above the max
-  this_selector <- selector %>% 
+  if(!this_cluster$selected){
+    this_selector <- selector %>% 
     filter(spray_status == this_cluster$spray_status,
            size == this_cluster$size)
-  if(this_selector$counter >= this_selector$clusters){
-    message('Already reached max')
-    clusters$selected[i] <- FALSE
-  } else {
-    clusters$selected[i] <- TRUE
-    selector$counter[selector$spray_status == this_cluster$spray_status &
-                     selector$size == this_cluster$size] <- 
-      this_selector$counter +1
+  if(this_selector$counter < this_selector$clusters){
+  clusters$selected[i] <- TRUE
+  selector$counter[selector$spray_status == this_cluster$spray_status &
+                   selector$size == this_cluster$size] <- 
+    this_selector$counter +1
   }
+}
 }
 ```
 
@@ -606,15 +650,29 @@ for (i in 1:nrow(clusters)){
 cat(paste0(sort(unique(clusters$cluster[clusters$selected])), collapse = ', '))
 ```
 
-Below is a table of all clusters, including both those selected and those not selected.
+Below is a table of all clusters, including both those selected and those not selected. The `health_facility` variable refers to the health facility which is nearest to that cluster. The `km` variable is the distance in (Levenstein) kilometers from the cluster's centroid to that health facility.
 
 ```{r}
 DT::datatable(clusters %>%
-                dplyr::select(cluster,
+                dplyr::select(closest_health_facility,
+                              cluster,
                               spray_status,
                               size,
-                              selected) %>%
-  arrange(desc(selected, size, spray_status)))
+                              selected, 
+                              km_to_closest_health_facility) %>%
+  arrange(desc(selected, size, spray_status)) %>%
+  arrange(desc(closest_health_facility)) %>%
+  left_join(children %>%
+              left_join(census_spatial_ll@data %>%
+                        dplyr::select(uri,
+                                      within_1k_voronoi_buffer_spray,
+                                      cluster) %>%
+                          filter(!within_1k_voronoi_buffer_spray),
+                        by = c('parent_auri' = 'uri')) %>%
+              group_by(cluster) %>%
+              summarise(n_children_in_core = n())) %>%
+    mutate(km_to_closest_health_facility = round(km_to_closest_health_facility, digits = 1))
+  ) 
 ```
 
 # Assignation to health posts and workers
@@ -624,90 +682,57 @@ Clusters will be grouped and assigned to workers. Where each worker will be base
 
 ## Segregation into sub-groups
 
-We divide our clusters into 7 groups of size 8 (for assignation to health facilities with 2 field workers), and 6 groups of size 5 (for assignation to health facilities with only 1 field worker). In order to do this, we group each (selected) cluster with the other clusters assigned to the same health facility, and begin the process. When there is "spill-over" (ie, the number of health facilities required to reach the necessary number of clusters for one group is multiple), we use nearby health facilities. In other words, one "group" might be assigned to multiple health facilities.
+Having randomly selected clusters, we can see how many clusters are assigned to each health facility. The previous concept of "groups" has been abandoned, since the random assignments are not divisable by group size (4/5) in many cases.
 
 ```{r}
-ordered_clusters <- us@data %>%
-  dplyr::select(health_facility) %>%
-  left_join(clusters %>%
-              filter(selected) %>%
-              group_by(health_facility = closest_health_facility) %>%
-              mutate(dummy = 1)) %>%
-  filter(!is.na(cluster))
-
-# Placeholder for group assignation
-group_df <- 
-  expand.grid(group_number = 1:13,
-              counter = 1:8)
-group_df$remove <- FALSE
-group_df$remove[group_df$group_number > 7 &
-           group_df$counter > 5] <- TRUE
-group_df <- group_df[!group_df$remove,]
-group_df <- group_df %>%
-  dplyr::select(-remove) %>%
-  arrange(group_number)
-
-# Loop through each group to get an expanded one
-group_df <-
-  cbind(group_df,
-        ordered_clusters)
-
-# Get a number of clusters variable
-group_df <-
-  group_df %>%
-  group_by(group_number) %>%
-  mutate(n_clusters = max(counter)) %>%
-  # Keep only relevant variables
-  ungroup %>%
-  mutate(km = km_to_closest_health_facility) %>%
-  dplyr::select(group_number,
-                n_clusters,
-                health_facility,
-                cluster,
-                km)
-```
-
-The below table shows the assignations of each cluster to different "groups". The `n_clusters` variable refers tothe number of clusters assigned to that group. In the below table, there is one row for each cluster. The `health_facility` variable refers to the health facility which is nearest to that cluster. The `km` variable is the distance in (Levenstein) kilometers from the cluster's centroid to that health facility.
-
-```{r}
-DT::datatable(group_df %>%
-                mutate(km = round(km, digits = 2)))
-```
-
-What follows is a variation of the same table. Instead of showing one row per cluster, we now show one row per "group". The `clusters` variable is simply a listing of clusters. The `health_facilities` variable are those health facilities that this group should use as their "base". 
-
-```{r}
-x <- group_df %>%
-  group_by(group_number) %>%
-  summarise(n_clusters = mean(n_clusters),
-            clusters = paste0(sort(cluster), collapse = ', '),
-            health_facilities = paste0(unique(gsub('CENTRO DE SAUDE DE ', 
-                                                   '',
-                                                   health_facility)), collapse = ', '))
-```
-
-```{r}
+x = clusters %>%
+  filter(selected) %>%
+  group_by(health_facility = closest_health_facility) %>%
+  summarise(n_clusters = n(),
+            clusters = paste0(sort(cluster), collapse = ', ')) %>%
+  arrange(desc(n_clusters)) 
+  
 DT::datatable(x)
+# ordered_clusters <- us@data %>%
+#   dplyr::select(health_facility) %>%
+#   left_join(clusters %>%
+#               filter(selected) %>%
+#               group_by(health_facility = closest_health_facility) %>%
+#               mutate(dummy = 1)) %>%
+#   filter(!is.na(cluster))
+# 
+# # Placeholder for group assignation
+# group_df <- 
+#   expand.grid(group_number = 1:13,
+#               counter = 1:8)
+# group_df$remove <- FALSE
+# group_df$remove[group_df$group_number > 7 &
+#            group_df$counter > 5] <- TRUE
+# group_df <- group_df[!group_df$remove,]
+# group_df <- group_df %>%
+#   dplyr::select(-remove) %>%
+#   arrange(group_number)
+# 
+# # Loop through each group to get an expanded one
+# group_df <-
+#   cbind(group_df,
+#         ordered_clusters)
+# 
+# # Get a number of clusters variable
+# group_df <-
+#   group_df %>%
+#   group_by(group_number) %>%
+#   mutate(n_clusters = max(counter)) %>%
+#   # Keep only relevant variables
+#   ungroup %>%
+#   mutate(km = km_to_closest_health_facility) %>%
+#   dplyr::select(group_number,
+#                 n_clusters,
+#                 health_facility,
+#                 cluster,
+#                 km)
 ```
 
-As previously mentioned, there are many cases of more than one health facility per group. This was necessary in order to get groups of appropriate size. If groups should only be based at one health facility, then they should use the first health facility listed only. 
-
-## Verification
-
-We need to check that the nearest health facilities to each cluster centroid correspond roughly with the `health_facility` field in the census data. This is because it may turn out that there are geographical obstacles which make our calculation of health facilities less than ideal.
-
-In order to do this, we simply compare the health facilities assigned by Levenstein distance with the field in the census.
-
-```{r}
-x <- group_df %>%
-              rename(health_facility_levenstein = health_facility) %>%
-  left_join(census_spatial_ll@data %>%
-  filter(!is.na(cluster)) %>%
-  group_by(cluster) %>%
-  summarise(health_facilities_from_census = paste0(unique(health_facility), collapse = ', ')), by = 'cluster')
-```
-
-The above table shows that there is rough concordance (ie, it's okay). In the census data, some houses from the same cluster are assigned to different health facilities (which is to be somewhat expected), but a manual examination of the above shows that nearly all clusters' Levenstein nearest health facility is among that cluster's assigned health facility per the census data.
 
 # Recruitment
 
@@ -735,12 +760,14 @@ final <-
                             lng),
             by = c('parent_auri' = 'uri')) %>%
   # Get group data
-  left_join(group_df %>%
-              dplyr::select(cluster, health_facility, group_number),
+  left_join(clusters %>%
+              filter(selected) %>%
+              rename(health_facility = closest_health_facility) %>%
+              dplyr::select(cluster, health_facility),
             by = 'cluster') %>%
   filter(!within_1k_voronoi_buffer_spray) %>%
   mutate(spray_status = ifelse(status, 'Spray', 'No spray')) %>%
-  dplyr::select(group_number, health_facility,
+  dplyr::select(health_facility,
                 cluster,
                 village_number,
                 LOCALIDADE,
@@ -750,7 +777,7 @@ final <-
                 name, dob, gender,
                 permid,
                 lng, lat) %>%
-  filter(!is.na(group_number))
+  filter(!is.na(health_facility))
 
 # Randomize order and give a selection number
 set.seed(639)
@@ -764,7 +791,7 @@ final <-
 
 # Reorder
 final <- final %>%
-  arrange(group_number, cluster, random_id)
+  arrange(health_facility, cluster, random_id)
 
 # Make data frame
 final <- data.frame(final)
@@ -840,12 +867,17 @@ health_map()
 What follows is a series of maps, one for each "group". Each map contains the locations of the children/houses assigned for recruitment to that group.
 
 ```{r}
+health_facilities <- sort(us@data$health_facility)
 group_map <- function(number = 1,
                       add_mop = FALSE){
-  the_colors <- colorRampPalette(brewer.pal(9, 'Spectral'))(13)
   sub_data <- final %>%
-    filter(group_number == number)
+    filter(health_facility == health_facilities[number])
   sub_us <- us[us@data$health_facility %in% unique(sub_data$health_facility),]
+  
+  color_pal <- colorRampPalette(brewer.pal(9, 'Spectral'))(length(unique(sub_data$cluster)))
+  
+  the_colors <- color_pal[as.numeric(factor(sub_data$cluster))]
+
   
   # Plot
   ll <- 
@@ -866,104 +898,124 @@ group_map <- function(number = 1,
                    radius = 3,
                    opacity = 0,
                    fillOpacity = 0.6,
-                   fillColor = the_colors[number]) %>%
+                   fillColor = the_colors) %>%
     addLegend(position = 'bottomright',
-              colors = the_colors[number],
-              labels = paste0('Group ', number))
+              colors = 'grey',
+              labels = paste0(health_facilities[number])) %>%
+    addLegend(position = 'topleft',
+              colors = color_pal,
+              labels = levels(factor(sub_data$cluster)),
+              title = 'Cluster')
   return(ll)
   
 }
 ```
 
 
-
-
-#### Group 1
+#### CENTRO DE SAUDE DE CATALE
 
 ```{r}
 group_map(1)
 ```
 
 
-#### Group 2
+#### CENTRO DE SAUDE DE CHIMUARA
+
 
 ```{r}
 group_map(2)
 ```
 
+#### CENTRO DE SAUDE DE GULAMO
 
-#### Group 3
 
 ```{r}
 group_map(3)
 ```
 
+#### CENTRO DE SAUDE DE LUALUA
 
-#### Group 4
 
 ```{r}
 group_map(4)
 ```
 
+#### CENTRO DE SAUDE DE MOPEIA
 
-#### Group 5
 
 ```{r}
 group_map(5)
 ```
 
-
-#### Group 6
+#### CENTRO DE SAUDE DE MUNGANE
 
 ```{r}
 group_map(6)
 ```
 
 
-#### Group 7
+#### CENTRO DE SAUDE DE NHACATUNDO
+
 
 ```{r}
 group_map(7)
 ```
 
+#### CENTRO DE SAUDE DE NOERE
 
-#### Group 8
 
 ```{r}
 group_map(8)
 ```
 
+#### CENTRO DE SAUDE  DE NZANZA
 
-#### Group 9
 
 ```{r}
 group_map(9)
 ```
 
+#### CENTRO DE SAUDE DE POSTO CAMPO
 
-#### Group 10
 
 ```{r}
 group_map(10)
 ```
 
+#### CENTRO DE SAUDE DE SANGALAZA
 
-#### Group 11
 
 ```{r}
 group_map(11)
 ```
 
-
-#### Group 12
+#### CENTRO DE SAUDE OITO DE MARCO
 
 ```{r}
 group_map(12)
 ```
 
-
-#### Group 13
-
 ```{r}
-group_map(13)
+# Write a master table for carlos
+master_table <-
+  children %>%
+  # Get census data
+  left_join(census_spatial_ll@data %>%
+              mutate(LOCALIDADE = locality_Final,
+                     BAIRRO = local_village_name) %>%
+              dplyr::select(uri,
+                            within_1k_voronoi_buffer_spray,
+                            cluster,
+                            LOCALIDADE,
+                            BAIRRO,
+                            lat,
+                            lng),
+            by = c('parent_auri' = 'uri')) %>%
+  # Get group data
+  left_join(final %>%
+              dplyr::select(permid,
+                            random_id)) %>%
+  filter(!duplicated(permid))
+write_csv(master_table, 'master_table_for_carlos.csv')
 ```
+

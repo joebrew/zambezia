@@ -55,14 +55,23 @@ knit_engines$set(asis = function(options) {
 ```
 
 
-```{r}
+
+```{r, message=FALSE}
 #### READ IN AND CLEAN UP DATA
 
 # Read in final dataset, as given by Orvahlo on October 24, 2016
 # census <- read_excel('Limpesa_Final__241016_For maps.xlsx')
 # Read in corrected final dataset, sent by Edgar on October 30, 2016
-# census <- read_excel('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.xls')
-census <- read_csv('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.csv')
+# census <- read_csv('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.csv')
+
+census <- read_csv('redcap/CensusMopeia_DATA_2016-11-01_1734.csv')
+
+# Divide between children and census
+census$child <- census$redcap_event_name == 'census_mopeia_chil_arm_1'
+children <- census %>% filter(child)
+census <-
+  census %>% filter(!child)
+
 # Fix weird header
 names(census)[6] <- 'locality_Final'
 
@@ -75,15 +84,30 @@ moz <- raster::getData('GADM', country = 'MOZ', level = 3)
 moz2 <- raster::getData('GADM', country = 'MOZ', level = 2)
 
 # GET CORRECT FINAL COLUMNS, AS EXPLAINED IN EMAIL
-# Get a village number
-census$village_number <- census$`village number_final`
-census$administrative_post <- census$administrative_post_final
-census$house_number <- census$houseno_Final_1
-census$locality <- census$locality_Final
+census$house_number <- census$houseno_final
+census$permid <- census$perm_id_final
+census$village_number <-
+  unlist(lapply(strsplit(census$house_number, split = '-'), function(x){x[2]}))
 
 # Convert village number to numeric
 census$village_number <- 
   as.numeric(as.character(census$village_number))
+
+# Keep only necessary vars in children
+children <- 
+  children %>%
+  dplyr::select(parent_auri,
+                permid,
+                name:children_info_complete)
+
+# Keep only necessary info in census
+census <- census %>%
+  dplyr::select(uri:family_id,
+                latitude:village_number)
+
+# Clean up geography
+census$x <- census$lng <- census$gpc_lng
+census$y <- census$lat <- census$gpc_lat
 
 # Remove all NA rows
 census <- census %>%
@@ -132,14 +156,7 @@ mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
 
 ```{r}
 # Read in data at the child-specific level
-children <- read_csv('redcap/CensusMopeia_DATA_2016-11-01_1734.csv')
-
-# Keep only those households with children
-children <- 
-  children %>%
-  filter(!is.na(perm_id_final)) %>%
-  mutate(permid = perm_id_final) %>%
-  dplyr::select(-perm_id_final)
+# children <- read_csv('redcap/CensusMopeia_DATA_2016-11-01_1734.csv')
 
 # Keep only those children which appear in the non-problematic census records
 children <-
@@ -303,6 +320,15 @@ children <-
 children <- 
   children %>%
   filter(!is.na(status))
+```
+
+```{r}
+# Read in the coordinates of health centers
+us <- read.csv('unidades_sanitarias_cleaned.csv')
+# Make spatial
+us$x <- us$lng <- us$lon <- us$longitude <- us$gpc_lng
+us$y <- us$lat <- us$latitude <- us$gpc_lat
+coordinates(us) <- ~gpc_lng+gpc_lat
 ```
 
 ```{r}
