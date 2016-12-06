@@ -781,6 +781,7 @@ final <-
 
 # Randomize order and give a selection number
 set.seed(639)
+final <- final[sample(1:nrow(final), size = nrow(final)),]
 final <- 
   final %>%
   mutate(dummy = 1) %>%
