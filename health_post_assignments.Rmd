@@ -607,6 +607,10 @@ We do this randomly and get the following selections:
 set.seed(123)
 # re arrange
 clusters <- clusters[sample(1:nrow(clusters), nrow(clusters)),]
+# JANUARY 2017
+# REMOVE THE FOLLOWING PROBLEMATIC CLUSTER
+# remove_these <- c(58)#c(119, 47, 58)
+# clusters <- clusters %>% filter(!cluster %in% remove_these)
 # randomly select
 clusters$selected <- FALSE
 # Assign as "selected" any cluster belonging to a health
@@ -673,6 +677,11 @@ DT::datatable(clusters %>%
               summarise(n_children_in_core = n())) %>%
     mutate(km_to_closest_health_facility = round(km_to_closest_health_facility, digits = 1))
   ) 
+
+# Save clusters and census for january revisions
+save(clusters, file =  'selected_clusters.RData')
+save(children, file = 'children.RData')
+save(census, file = 'census.RData')
 ```
 
 # Assignation to health posts and workers
