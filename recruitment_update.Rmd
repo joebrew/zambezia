@@ -1,0 +1,1351 @@
+---
+title: "Recruitment update"
+author: "Carlos Chaccour, Joe Brew"
+date: "February 1, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(comment = NA, 
+               echo = FALSE, 
+               warning = FALSE, 
+               message = FALSE, 
+               error = TRUE, 
+               cache = FALSE)
+library(tidyverse)
+library(cism)
+library(data.table)
+library(ggplot2)
+library(automap)
+library(akima)
+library(RColorBrewer)
+
+clean_perm_id <- function(perm_id){
+  x <- strsplit(perm_id, '-')
+  y <- lapply(x, 
+         function(x){
+           as.numeric(as.character(x))
+         })
+  z <- lapply(y, function(a){
+    paste0(a, collapse = '-')
+  })
+  zz <- unlist(z)
+  return(zz)
+}
+```
+
+
+```{r}
+# Source the file read-in
+source('recruitment_update.R')
+
+# Recode hf_id
+hf_id_df <- 
+  data_frame(hf_id = 1:12,
+             hf = c(letters[1:12]))
+pcd <- pcd %>%
+  mutate(hf_id = as.numeric(hf_id)) %>%
+  left_join(hf_id_df)
+
+# Clean up data
+pcd <- pcd %>%
+  mutate(tdr = ifelse(tdr == 1, 'Got RDT',
+                      ifelse(tdr == 2, 'No RDT', NA)),
+         tdr_res = ifelse(tdr_res == 1, 'Positive',
+                          ifelse(tdr_res == 2, 'Negative', NA)))
+
+# Filter only under 5s for pcd
+pcd <- pcd %>%
+  filter(age == 1)
+
+# Define simple function for plotting
+simple_plot <- function(var, data = NULL){
+  if(is.null(data)){
+    data <- pcd
+  }
+  x <- data %>%
+  group_by_(var) %>%
+  tally %>%
+  mutate(p = n / sum(n) * 100) %>%
+    rename_(x = var)
+return(ggplot(data = x,
+       aes(x = x,
+           y = n)) +
+  geom_bar(stat = 'identity',
+           fill = 'darkorange',
+           alpha = 0.6) +
+    geom_label(aes(label = paste0(round(p, digits = 2), '%'))) +
+  theme_cism())
+}
+
+# Get village centroids
+village_centroids <- master_table %>%
+  group_by(village = village_number) %>%
+  summarise(lng = mean(lng, na.rm = TRUE),
+            lat = mean(lat, na.rm = TRUE),
+            n = n())
+
+# Get map of mop
+library(cism)
+moz2 <- moz2
+zam <- moz2_fortified %>%
+  filter(id == 'Mopeia')
+zam_sp <- moz2[moz2@data$NAME_2 == 'Mopeia',]
+
+moz2 <- raster::getData('GADM', country = 'MOZ', level = 2)
+# Make visit_date a date object
+pcd$visit_date <- as.Date(pcd$visit_date)
+```
+
+```{r}
+# Get participants for the cross
+
+# Read in some saved objects from the December doc
+# Save clusters and census for january revisions
+load('selected_clusters.RData')
+load('children.RData')
+load('census.RData')
+
+# So, we can sample children at individual level, but for adults, 
+# we'll need to just select a house
+
+if('cross_sectional.RData' %in% dir('backups')){
+  load('backups/cross_sectional.RData') 
+  } else {
+    
+    set.seed(123)
+  # Get households by cluster
+  selected <- 
+    census %>%
+                dplyr::select(uri, 
+                              cluster,
+                              lng,
+                              lat,
+                              within_1k_voronoi_buffer,
+                              village,
+                  cluster,
+                  head_name,
+                  health_facility,
+                  local_village_name,
+                  number_of_children,
+                  number_of_residents) %>%
+    mutate(number_of_adults = number_of_residents - number_of_children) %>%
+    # Bring in the cluster info to children
+    left_join(clusters %>%
+                dplyr::select(cluster,
+                              size,
+                              spray_status),
+              by = 'cluster') %>%
+    # Filter out those whose spray status is not known
+    filter(!is.na(spray_status)) %>%
+    # Filter out those who are not in the core area
+    filter(!within_1k_voronoi_buffer) 
+  # Randomly re-shuffle order
+  selected <- selected[sample(1:nrow(selected), nrow(selected)),]
+  
+  # # Get the kids that are in each house
+  # right <- children %>%
+  #   mutate(in_acd = clean_perm_id(permid) %in%
+  #               unique(clean_perm_id(acd$perm_id))) %>%
+  #   filter(!in_acd) 
+  # right <- right %>%
+  #   sample_n(nrow(right)) %>%
+  #   mutate(dummy = 1) %>%
+  #   group_by(parent_auri) %>%
+  #   summarise(children = paste0(cumsum(dummy), ' ', name, collapse = ', '))
+  # 
+  # selected <- 
+  #   selected %>%
+  #   left_join(right,
+  #             by = c('uri' = 'parent_auri')) %>%
+  #   mutate(children = if_else(is.na(children), 
+  #                             'No children',
+  #                             children))
+  
+  # Order by cluster
+  selected <- selected %>%
+    arrange(cluster)
+  
+  # remove extra variables
+  selected <- 
+    selected %>%
+    dplyr::select(-within_1k_voronoi_buffer,
+                  -village)
+  
+  # Perform a random selection, stratifying by cluster size
+  vals <- rep(c(121, 122, 122), 2)
+  counter <- 0
+  # Get a random_selection
+  results <- list()
+  sss <- c('No spray', 'Spray')
+  szs <- c('Small', 'Medium', 'Large')
+  for(ss in 1:length(sss)){
+    for(sz in 1:length(szs)){
+      counter <- counter + 1
+      message(counter)
+      message(paste0('ss = ', ss))
+      message(paste0('sz = ', sz))
+      val <- vals[counter]
+      # Get a selection
+      sub_data <- 
+        selected %>%
+        filter(spray_status == sss[ss],
+               size == szs[sz])
+      this_selection <- sub_data[sample(1:nrow(sub_data), val),]
+      results[[counter]] <- this_selection
+    }
+  }
+  pseudo_selected <- bind_rows(results)
+  
+    # Now that we've gotten a random selection, let's 
+  # produce "target numbers" by house
+  target_numbers <- 
+    selected %>%
+    group_by(cluster) %>%
+    summarise(n_houses_in_cluster = length(unique(uri)),
+              size = first(size)) %>%
+    left_join(
+      pseudo_selected %>%
+        group_by(cluster) %>%
+        summarise(target_number = length(unique(uri)))
+    )
+    target_numbers$target_number  <- 
+      ifelse(is.na(target_numbers$target_number), 
+              0, 
+             target_numbers$target_number)
+    
+    # Get number of fieldworkers needed
+    target_numbers$n_fieldworkers <-
+      (target_numbers$target_number %/% 5) + 1
+    
+  
+  # Get target for cluster
+  selected <-
+    selected %>%
+    left_join(target_numbers)
+  
+  # Ensure random order
+  selected <- selected %>%
+    mutate(x = 1:nrow(selected))
+  selected <- selected[sample(1:nrow(selected), nrow(selected)),]
+  
+  # Arrange by cluster
+  selected <- selected %>%
+    arrange(cluster)
+  
+  # Assign a visit order number
+  selected <- 
+    selected %>%
+    dplyr::select(-x) %>%
+    group_by(cluster) %>%
+    mutate(visit_number = 1:n()) %>%
+    ungroup
+  
+  # Save
+  save(selected, file = 'backups/cross_sectional.RData')
+  write_csv(selected, 'backups/cross_sectional.csv')
+  save(target_numbers, file = 'backups/cross_sectional_target_numbers.RData')
+  write_csv(target_numbers, 'backups/cross_sectional_target_numbers_.csv')
+  }
+save(selected, file = paste0('backups/cross_sectional_',
+                             Sys.Date(),
+                             '.RData'))
+save(target_number, file = paste0('backups/cross_sectional_target_numbers_',
+                             Sys.Date(),
+                             '.RData'))
+
+# } 'cross_sectional_adults.RData' %in% dir('backups') &
+#    'cross_sectional_children.Rdata' %in% dir('backups')){
+#   load('backups/cross_sectional_children.Rdata')
+#   load('backups/cross_sectional_adults.Rdata')
+# } else {
+    
+#   selected_children <- 
+#     children %>%
+#     # Get cluster number
+#     left_join(census %>%
+#                 dplyr::select(uri, 
+#                               cluster,
+#                               lng,
+#                               lat,
+#                               within_1k_voronoi_buffer,
+#                               village,
+#                   cluster,
+#                   head_name,
+#                   health_facility,
+#                   local_village_name),
+#               by = c('parent_auri'='uri')) %>%
+#     # Bring in the cluster info to children
+#     left_join(clusters %>%
+#                 dplyr::select(cluster,
+#                               size,
+#                               spray_status),
+#               by = 'cluster') %>%
+#     # Filter out those whose spray status is not known
+#     filter(!is.na(spray_status)) %>%
+#     # Filter out those who are not in the core area
+#     filter(!within_1k_voronoi_buffer) 
+#   # Randomly re-shuffle order
+#   set.seed(123)
+#   selected_children <- selected_children[sample(1:nrow(selected_children),
+#                                                 nrow(selected_children)),]
+#   
+#   # Don't keep any duplicates from the same house
+#   selected_children <-
+#     selected_children %>%
+#     filter(!duplicated(house_number))
+#   
+#   # Group by size of cluster and get equal numbers per cluster
+#   sizes <- unique(selected_children$size)
+#   ns <- c(128, 128, 129)
+#   results_list <- list()
+#   for (i in 1:length(sizes)){
+#     sub_data <- selected_children %>%
+#       filter(size == sizes[i]) %>%
+#       sample_n(ns[i])
+#     results_list[[i]] <- sub_data
+#   }
+#   selected_children <- bind_rows(results_list)
+#   
+#   ###########################
+#   # Do the same for adults
+#   selected_adults <- 
+#     census %>%
+#     # Make sure to not get any from the houses of the children selected
+#     filter(!house_number %in% selected_children$house_number) %>%
+#     # Bring in the cluster info to children
+#     left_join(clusters %>%
+#                 dplyr::select(cluster, size,
+#                               spray_status),
+#               by = 'cluster') %>%
+#     # Filter out those whose spray status is not known
+#     filter(!is.na(spray_status)) %>%
+#     # Filter out those who are not in the core area
+#     filter(!within_1k_voronoi_buffer) 
+#   # Randomly re-shuffle order
+#   set.seed(123)
+#   selected_adults <- selected_adults[sample(1:nrow(selected_adults),
+#                                                 nrow(selected_adults)),]
+#   
+#   # Don't keep any duplicates from the same house
+#   selected_adults <-
+#     selected_adults %>%
+#     filter(!duplicated(house_number))
+#   # Group by size of cluster and get equal numbers per cluster
+#   sizes <- unique(selected_adults$size)
+#   ns <- c(128, 128, 129)
+#   results_list <- list()
+#   for (i in 1:length(sizes)){
+#     sub_data <- selected_adults %>%
+#       filter(size == sizes[i]) %>%
+#       sample_n(ns[i])
+#     results_list[[i]] <- sub_data
+#   }
+#   selected_adults <- bind_rows(results_list) %>%
+#     mutate(number_of_adults = number_of_residents - number_of_children)
+#   # Get a specific person
+#   selected_adults$person_number <- NA
+#   for (i in 1:nrow(selected_adults)){
+#     selected_adults$person_number[i] <- 
+#       sample(1:selected_adults$number_of_adults[i],
+#              1)
+#   }
+#   selected_adults <-
+#     selected_adults %>%
+#     dplyr::select(uri, 
+#                   village,
+#                   house_number,
+#                   cluster,
+#                   head_name,
+#                   lng,
+#                   lat,
+#                   health_facility,
+#                   local_village_name,
+#                   number_of_adults,
+#                   person_number)
+#   
+#   
+#   cross_sectional_children <- selected_children
+#   cross_sectional_adults <- selected_adults
+#    save(cross_sectional_children, file = 'cross_sectional_children.Rdata')
+#    save(cross_sectional_adults, file = 'cross_sectional_adults.Rdata')
+# }
+# 
+#    save(cross_sectional_children, file =
+#           paste0('backups/cross_sectional_children_',
+#                  Sys.Date(),
+#                  '.Rdata'))   
+#    save(cross_sectional_adults, file =
+#           paste0('backups/cross_sectional_adults_',
+#                  Sys.Date(),
+#                  '.Rdata'))
+#    
+plot(mop2)
+points(cross_sectional_children$lng,
+       cross_sectional_children$lat,
+       col = alpha('darkgreen', 0.5),
+       cex = 0.6)
+
+points(cross_sectional_adults$lng,
+       cross_sectional_adults$lat,
+       col = alpha('darkred', 0.5),
+       cex = 0.6)
+legend('bottomleft',
+       col = alpha(c('darkgreen', 'darkred'), 0.5),
+       cex = 0.6,
+       legend = c('Adults', 'Children'),
+       pch = 1)
+
+# Write csvs for carlos
+write_csv(cross_sectional_children, 'backups/cross_sectional_children.csv')
+
+write_csv(cross_sectional_adults, 'backups/cross_sectional_adults.csv')
+```
+
+
+# Passive case detection data
+
+
+## RDT testing rate
+
+The below chart shows the total RDT testing rate, from the passive case detection (PCD) database.
+
+```{r}
+simple_plot(var = 'tdr') +
+  labs(x = 'Test status',
+       y = 'People',
+       title = 'RDT testing') 
+```
+
+The below table shows the above chart's raw numbers.
+
+```{r}
+table(pcd$tdr)
+```
+
+## RDT testing rate over time
+
+The below chart shows the number of patients tested and not tested in the PCD database over time. 
+
+```{r}
+x <- pcd %>%
+  group_by(date = visit_date) %>%
+  summarise(tested = length(which(tdr == 'Got RDT')),
+            not_tested = length(which(tdr == 'No RDT')))
+y <- x
+x <- gather(x, key, value, tested:not_tested)
+
+ggplot(data = x %>%
+         filter(date >= '2016-12-01') %>%
+         mutate(key = gsub("_", ' ', key)),
+       aes(x = date,
+           y = value,
+           color = key)) +
+  geom_line() +
+  theme_cism() +
+  labs(title = 'Tests over time: daily',
+       subtitle = 'PCD database',
+       x = 'Date',
+       y = 'People') +
+  scale_color_manual(name = '',
+                     values = c('darkorange', 'darkgreen'))
+```
+
+
+The below table shows the above chart's raw numbers.
+
+```{r}
+DT::datatable(y)
+```
+
+The below chart is identical to the above, but shows _cumulative_ PCD patients tested and not tested.
+
+```{r}
+x <- x %>%
+  arrange(date) %>%
+  group_by(key) %>%
+  mutate(cum_value = cumsum(value)) %>%
+  ungroup 
+ggplot(data = x %>%
+         filter(date >= '2016-12-01') %>%
+         mutate(key = gsub("_", ' ', key)),
+       aes(x = date,
+           y = cum_value,
+           color = key)) +
+  geom_line() +
+  theme_cism() +
+  labs(title = 'Tests over time: cumulative',
+       subtitle = 'PCD database',
+       x = 'Date',
+       y = 'People') +
+  scale_color_manual(name = '',
+                     values = c('darkorange', 'darkgreen'))
+```
+
+## RDT positivity rate
+
+The below chart shows the overall RDT positivty rate from the PCD database.
+
+```{r}
+simple_plot(var = 'tdr_res',
+            data = pcd %>% filter(!is.na(tdr_res))) +
+  labs(x = 'Test outcome',
+       y = 'People',
+       title = 'RDT outcomes') 
+```
+
+The below table shows the same data as above,in raw numbers.
+
+```{r}
+table(pcd$tdr_res)
+```
+
+### RDT positivity rate over time
+
+The below chart shows the number of test outcomes over time, aggregated at the weekly level.
+
+```{r}
+x <- pcd %>%
+  mutate(year_week = format(visit_date, '%Y %U')) %>%
+  group_by(year_week) %>%
+  mutate(week = min(visit_date)) %>%
+  group_by(date = week, tdr_res) %>%
+  tally
+
+ggplot(data = x %>%
+         filter(date >= '2016-12-01'),
+       aes(x = date,
+           y = n,
+           color = tdr_res)) +
+  geom_line() +
+  theme_cism() +
+  labs(x = 'Date',
+       y = 'People',
+       title = 'Raw number of test outcomes',
+       subtitle = 'Aggregated to weekly level') +
+  scale_color_manual(name = '',
+                     values = c('darkorange', 'darkgreen'))
+```
+
+## Overall positivity rate
+
+```{r}
+y <- 
+  pcd %>%
+  filter(!is.na(tdr_res)) %>%
+  mutate(year_week = format(visit_date, '%Y %U')) %>%
+  group_by(year_week) %>%
+  mutate(week = min(visit_date)) %>%
+  group_by(date = week) %>%
+  summarise(p = length(which(tdr_res == 'Positive')) / n() * 100)
+
+ggplot(data = y %>%
+         filter(date >= '2016-12-01'),
+       aes(x = date,
+           y = p)) +
+  geom_area(alpha= 0.6,
+            fill = 'darkgreen') +
+  theme_cism() +
+  labs(title = 'Overall RDT positivity rate',
+       x = 'Date',
+       y = 'Percentage')
+```
+
+
+## Positivity rate by intervention status over time
+
+The below chart shows the positivity rate over time by patient's spray status (ie, whether the village where they live was assigned to spraying, assigned not to be sprayed, or is unknown/NA).
+
+```{r}
+x <- pcd %>%
+  mutate(year_week = format(visit_date, '%Y %U')) %>%
+  group_by(year_week) %>%
+  mutate(week = min(visit_date)) %>%
+  group_by(date = week, tdr_res, spray_status) %>%
+  tally %>%
+  arrange(date) %>%
+  group_by(date, spray_status) %>%
+  summarise(positives = sum(n[tdr_res == 'Positive'], na.rm = TRUE),
+            negatives = sum(n[tdr_res == 'Negative'], na.rm = TRUE),
+            n = sum(n, na.rm = TRUE)) %>%
+  ungroup %>%
+  mutate(positivity_rate = positives / n * 100) %>%
+  # Arrange by date and get cumsum
+  arrange(date) %>%
+  group_by(spray_status) %>%
+  mutate(cum_positives = cumsum(positives),
+         cum_n = cumsum(n)) %>%
+  mutate(cum_positivity_rate = cum_positives / cum_n * 100)
+
+
+x$days_since_end_of_spray <- x$date - as.Date('2016-10-30')
+cols <- colorRampPalette(brewer.pal(n = 8, 'Spectral'))(length(unique(x$spray_status[!is.na(x$spray_status)])))
+ggplot(data = x %>% filter(date >= '2016-12-01',
+                           !is.na(spray_status)),
+       aes(x = days_since_end_of_spray,
+           y = positivity_rate,
+           group = spray_status,
+           fill = spray_status)) +
+  geom_bar(stat = 'identity', pos = 'dodge',
+           alpha = 0.6) +
+  theme_cism() +
+  labs(title = 'Week-specific positivity rate',
+       subtitle = 'By spray status',
+       x = 'Days since end of spraying',
+       y = 'Positivity rate') +
+  scale_fill_manual(name = '',
+                     values = cols,
+                     na.value = 'grey') +
+  geom_vline(xintercept = 90, lty = 3, alpha = 0.6)
+  # geom_vline(xintercept = as.numeric(as.Date('2017-01-15')), lty = 2, alpha = 0.6)
+```
+
+The below chart is identical to above, but shows _cumulative_ positivity rate
+
+```{r}
+cols <- colorRampPalette(brewer.pal(n = 8, 'Spectral'))(length(unique(x$spray_status[!is.na(x$spray_status)])))
+
+ggplot(data = x %>% filter(date >= '2016-12-01',
+                           !is.na(spray_status)),
+       aes(x = date,
+           y = cum_positivity_rate,
+           group = spray_status,
+           color = spray_status,
+           size = n)) +
+  geom_line() +
+  theme_cism() +
+  labs(title = 'CUMULATIVE positivity rate',
+       subtitle = 'By spray status, weekly aggregations',
+       x = 'Date',
+       y = 'Positivity rate') +
+  scale_color_manual(name = '',
+                     values = cols,
+                     na.value = 'grey')
+```
+
+## Cross-table of testing and positivity
+
+The below cross table shows RDT tests by whether an RDT test was administered. A row of only 0's is expected.
+
+```{r}
+table(pcd$tdr, pcd$tdr_res)
+```
+
+## Cross-table of spray status and positivity
+
+The below cross table shows RDT test results by spray status.
+
+```{r}
+table(pcd$spray_status,
+      pcd$tdr_res)
+```
+
+
+The below table is identical to above, but instead of showing raw numbers, it shows percentages (by spray status).
+
+```{r}
+prop.table(table(pcd$spray_status,
+      pcd$tdr_res), 1) * 100
+```
+
+## Modeling for odds ratios
+
+What follows is basic code for constructing a binomial logistic regression using the PCD data. This allows us to estimate an odds ratio and 95% confidence interval.
+
+```{r, echo = TRUE}
+fit <- glm(tdr_res == 'Positive' ~ spray_status, 
+           family = binomial('logit'),
+           data = pcd)
+ors <- exp(coef(fit))
+ci <- exp(confint(fit))
+
+or_df <- data_frame(or = ors[2],
+                    lwr = ci[2,1],
+                    upr = ci[2,2])
+
+# Round
+for (j in 1:ncol(or_df)){
+  or_df[,j] <- round(or_df[,j], digits = 2)
+}
+
+DT::datatable(or_df)
+```
+
+### Interpretation
+
+The likelihood of a positive RDT for those living in sprayed zones is `r or_df$or` that of those living in non-spray zones (95% confidence interval of `r or_df$lwr` to `r or_df$upr`).
+
+## Weekly odds ratios
+
+The below chart shows how our odds ratio (odds of positive RDT, sprayed over non-sprayed) has changed over time (and how confidence intervals have shrunk). An estimate below 1.0 suggests protection from spraying; an estimate above 1.0 suggests that spraying is a risk factor for a postive RDT (this would not be the biologically expected result). Where the vertical 95% confidence bars intersect the dashed line, there is no statistical significance; when they do not interesect, the difference between spray / no-spray groups is considered statistically significant.
+
+```{r}
+pcd_week <-
+  pcd %>%
+  mutate(date = as.Date(visit_date)) %>%
+  mutate(year = as.numeric(format(date, '%Y')),
+         week = as.numeric(format(date, '%U'))) %>%
+  group_by(year, week) %>%
+  mutate(date = min(date))
+
+dates <- sort(unique(pcd_week$date))
+dates <- dates[dates >= as.Date('2016-12-01')]
+
+results <- list(); results_week <- list()
+counter <- 1
+for (i in 1:length(dates)){
+  the_data <- pcd_week %>%
+    filter(date <= dates[i])
+  try({
+    fit <- glm(tdr_res == 'Positive' ~ spray_status, 
+         family = binomial('logit'),
+         data = the_data)
+    ors <- exp(coef(fit))
+    ci_try <- try({
+      ci <- exp(confint(fit))
+    })
+    if(class(ci_try) == "try-error"){
+      ci <- data.frame(x = rep(NA, 2),
+                       y = rep(NA, 2))
+    }
+  
+
+  or_df <- data_frame(or = ors[2],
+                    lwr = ci[2,1],
+                    upr = ci[2,2],
+                    date = dates[i])
+  results[[counter]] <- or_df
+  # counter <- counter + 1
+  })
+  
+  ## Week specific (not cumulative)
+    the_data_week <- pcd_week %>%
+    filter(date == dates[i])
+  try({
+    message('Weekly')
+    fit_week <- glm(tdr_res == 'Positive' ~ spray_status, 
+         family = binomial('logit'),
+         data = the_data_week)
+    ors_week <- exp(coef(fit_week))
+    ci_try_week <- try({
+      ci_week <- exp(confint(fit_week))
+    })
+    if(class(ci_try_week) == "try-error"){
+      ci_week <- data.frame(x = rep(NA, 2),
+                       y = rep(NA, 2))
+    }
+  
+
+  or_df_week <- data_frame(or = ors_week[2],
+                    lwr = ci_week[2,1],
+                    upr = ci_week[2,2],
+                    date = dates[i])
+  results_week[[counter]] <- or_df_week
+  counter <- counter + 1
+  })
+}
+or_df <- bind_rows(results)
+or_df_week <- bind_rows(results_week)
+```
+
+
+```{r}
+ggplot(data = or_df,
+       aes(x = date,
+           y = or)) +
+  geom_line(alpha = 0.6) +
+  geom_linerange(aes(ymin = lwr,
+                     ymax = upr),
+                 alpha = 0.6) +
+  labs(title = 'Odds ratio over time',
+       subtitle = 'Cumulative (all estimates included previous observations)',
+       x = 'Date',
+       y = 'Odds ratio') +
+  theme_cism() +
+  geom_hline(yintercept = 1, lty = 2) +
+  ylim(0, 2)
+```
+
+
+```{r}
+ggplot(data = or_df_week,
+       aes(x = date,
+           y = or)) +
+  geom_bar(stat = 'identity', 
+           fill = 'darkgreen',
+           alpha = 0.6) +
+  geom_linerange(aes(ymin = lwr,
+                     ymax = upr),
+                 alpha = 0.6) +
+  labs(title = 'Odds ratio over time',
+       subtitle = 'Week-specific (all estimates included previous observations)',
+       x = 'Date',
+       y = 'Odds ratio') +
+  theme_cism() +
+  geom_hline(yintercept = 1, lty = 2) +
+  ylim(0, 2)
+```
+
+## Analysis by health facility
+
+```{r}
+x <- 
+  pcd %>%
+    mutate(date = as.Date(visit_date)) %>%
+  mutate(year = as.numeric(format(date, '%Y')),
+         week = as.numeric(format(date, '%U'))) %>%
+  group_by(year, week) %>%
+  mutate(date = min(date)) %>%
+  group_by(hf_id, date) %>%
+  summarise(malaria = length(which(malaria)),
+            visits = n()) %>%
+  mutate(p = malaria / visits * 100)
+
+ggplot(dat = x %>%
+         filter(date >= '2016-12-01') %>%
+         filter(as.numeric(hf_id) <= 12),
+       aes(x = date,
+           y = p)) +
+  # geom_area(fill = 'darkgreen', alpha = 0.5) +
+  geom_point(aes(size = visits),
+             alpha = 0.5) +
+  geom_line(alpha = 0.3) +
+  facet_wrap(~hf_id) +
+  scale_x_date(date_labels = "%b") +
+  labs(title = 'Malaria trends',
+       subtitle = 'Weekly aggregated malaria visits as % of all visits by health facility',
+       x = 'Date',
+       y = 'Percentage') +
+  theme_cism()
+```
+
+## PCD maps
+
+### Map of total positive RDTs
+
+The below map is a visualization of the _raw_ number of RDT positive results, by village.
+
+```{r}
+# Get positivity rate by village
+pr_by_village <- 
+  pcd %>%
+  group_by(village) %>%
+  summarise(positives = length(which(tdr_res == 'Positive')),
+            negatives = length(which(tdr_res == 'Negative')),
+            tested = length(which(!is.na(tdr_res))),
+            n_pcd = n()) %>%
+  mutate(p_positive = positives / tested * 100)
+
+# Join to centroids
+x <- village_centroids %>%
+  left_join(pr_by_village)
+
+ggplot(data = zam) +
+  geom_polygon(aes(x = long,
+           y = lat,
+           group = group),
+           alpha = 0.6) +
+  coord_map() +
+  theme_cism() +
+  geom_point(data = x,
+             aes(x = lng,
+                 y = lat,
+                 size = positives),
+             color = 'darkgreen',
+             alpha = 0.8) +
+  scale_size_continuous(name = '') +
+  xlab('Longitude') +
+  ylab('Latitude') +
+  labs(title = 'Total positive RDTs by village',
+       subtitle = 'Raw numbers')
+``` 
+
+
+### Map of PCD positivity rate
+
+The below chart shows the positivity _rate_ by village.
+
+```{r}
+# Map
+cism_map(lng = x$lng,
+         lat = x$lat,
+         x = x$p_positive,
+         fspdf = zam) +
+  labs(title = 'Positivity rate by village',
+       subtitle = 'Percent positive of RDTs administered')
+```
+
+### Rasterized / smoothed PCD positivity rate
+
+The below chart shows the "positivity index", a smoothed way of viewing where most positive cases come from. Note: this is not a rate, and is therefore heavily influenced by population.
+
+```{r}
+# Create a df with one row for each positive case at village level
+map_df <- x
+map_df <- map_df[0,]
+counter <- 0
+for (i in 1:nrow(x)){
+ this_df <- x[i,] 
+ if(!is.na(this_df$positives)){
+    for(j in 1:this_df$positives){
+   counter <- counter + 1
+   map_df[counter,] <-
+     this_df
+  } 
+ }
+}
+
+ggplot() +
+  geom_polygon(data = zam, aes(x = long,
+           y = lat,
+           # z = p_positive,
+           group = group),
+           alpha = 0.6) +
+  coord_map() +
+  stat_density2d(data = map_df,
+                aes(fill = ..level..,
+                  # fill = p_positive,
+                    x = lng, 
+                    y = lat),
+                size = 5, bins = 50, 
+                geom = "polygon",
+                alpha = 0.5) +
+                  theme_cism() +
+  labs(title = 'Raw positivity index',
+       subtitle = 'Not accounting for population distribution',
+       x = 'Longitude',
+       y = 'Latitude') +
+  scale_fill_gradient2(name = 'Index',
+                       low="white",mid="orange",high="red") 
+```
+
+
+```{r, eval = FALSE}
+# Do spline interpolation with the akima package
+fld = with(x %>%
+             filter(!is.na(p_positive)), interp(x = lng, y = lat, 
+                     z = p_positive, 
+                     duplicate="median",
+                                                              xo=seq(min(zam$long), 
+                                                                     max(zam$long), length = 100),
+                            yo=seq(min(zam$lat), max(zam$lat), length = 100),
+                            extrap=TRUE, linear=FALSE))
+melt_x = rep(fld$x, times=length(fld$y))
+melt_y = rep(fld$y, each=length(fld$x))
+melt_z = as.vector(fld$z)
+level_data = data.frame(longitude=melt_x, latitude=melt_y, APPT=melt_z)
+interp_data = na.omit(level_data)
+grid_points = SpatialPoints(interp_data[,1:2])
+# grid_points = SpatialPoints(interp_data[,2:1])
+
+proj4string(grid_points)<- proj4string(zam_sp)
+in_points = !is.na(over(grid_points,zam_sp))
+inside_points = interp_data[in_points, ]
+
+ggplot(data=inside_points, 
+       aes(x=longitude, y=latitude)) + 
+  geom_tile(aes(fill=APPT)) + 
+  stat_contour(aes(z=APPT)) +
+  coord_equal() + 
+  scale_fill_gradient2(low="blue",mid="white",high="red", midpoint=mean(inside_points$APPT)) # + borders
+```
+
+The below map shows a smoothed, rasterized surface for positivity rate. Krieging is used to achieve interpolated estimates. Unlike the previous map, here we model a _rate_, which should be independent of population density.
+
+```{r}
+# Krieging
+sp_df <- x
+coordinates(sp_df) <- ~lng + lat
+proj4string(sp_df) <- proj4string(zam_sp)
+sp_df <- sp_df[!is.na(sp_df$p_positive),]
+sp_points <- SpatialPoints(sp_df)
+
+
+# Create a fine grid
+pixels_per_side = 200
+bottom.left = apply(sp_points@coords,2,min)
+top.right = apply(sp_points@coords,2,max)
+margin = abs((top.right-bottom.left))/10
+bottom.left = bottom.left-margin
+top.right = top.right+margin
+pixel.size = abs(top.right-bottom.left)/pixels_per_side
+g = GridTopology(cellcentre.offset=bottom.left,
+             cellsize=pixel.size,
+             cells.dim=c(pixels_per_side,pixels_per_side))
+
+# # Clip the grid to the state regions
+# map_base_data = subset(map_data("state"), region %in% regions)
+# colnames(map_base_data)[match(c("long","lat"),colnames(map_base_data))] = c("longitude","latitude")
+# foo = function(x) {
+#   state = unique(x$region)
+#   print(state)
+#   Polygons(list(Polygon(x[,c("latitude","longitude")])),ID=state)
+# }
+# state_pg = SpatialPolygons(dlply(map_base_data, .(region), foo))
+grid_points = SpatialPoints(g)
+proj4string(grid_points) <- proj4string(zam_sp)
+in_points = !is.na(over(grid_points,polygons(zam_sp)))
+fit_points = SpatialPoints(as.data.frame(grid_points)[in_points,])
+proj4string(fit_points) <- proj4string(zam_sp)
+
+# make projected before krieging
+new_pro <- CRS("+init=epsg:3036")
+proj4string(fit_points) <-
+  proj4string(zam_sp) <- 
+  proj4string(sp_df) <- new_pro
+
+# Do kriging
+krig = autoKrige(p_positive~1, sp_df, new_data=fit_points)
+interp_data = as.data.frame(krig$krige_output)
+colnames(interp_data) = c("longitude","latitude","APPT_pred","APPT_var","APPT_stdev")
+
+# Set up map plot
+map_base_aesthetics = aes(x=longitude, y=latitude, group=group)
+map_base = geom_polygon(data=zam_sp, map_base_aesthetics)
+borders = geom_polygon(data=zam_sp, map_base_aesthetics, color="black", fill=NA)
+
+nbin=20
+
+ggplot(data=interp_data, aes(x=longitude, y=latitude)) + 
+  # geom_polygon(data = zam, aes(x = long,
+  #          y = lat,
+  #          # z = p_positive,
+  #          group = group),
+  #          alpha = 0.6) +
+  # coord_map() +
+  geom_tile(aes(fill=APPT_pred),color=NA) +
+  # stat_contour(aes(z=APPT_pred), bins=nbin, color="#999999") +
+  scale_fill_gradient2(name = 'Interpolated\npositivity',
+                       low="white",mid="orange",high="red", midpoint=mean(interp_data$APPT_pred)) +
+  # borders +
+  theme_cism() +
+  labs(title = 'Interpolated positivity rate',
+       subtitle = 'Krieging method',
+       x = 'Longitude',
+       y = 'Latitude')
+  # coord_equal()
+  # # geom_point(data=sub_data,color="black",size=0.3)
+```
+
+
+
+
+## Incidence calculations
+
+### Overall
+
+```{r}
+load('census.RData')
+
+daily_incidence <-
+  pcd %>%
+  group_by(date = visit_date) %>%
+  summarise(positives = length(which(tdr_res == 'Positive'))) 
+daily_incidence$denominator <- nrow(census)
+
+daily_incidence$k <- daily_incidence$positives / daily_incidence$denominator * 1000
+
+ggplot(data = daily_incidence %>%
+         filter(date >= '2016-12-01'),
+       aes(x = date,
+           y = k)) +
+  geom_line(alpha = 0.6) +
+  theme_cism() +
+  labs(x = 'Date',
+       y = 'Cases per 1,000 population',
+       title = 'Incidence through PCD',
+       subtitle = 'All positive cases divided by entire population')
+
+```
+
+Below is the same data in tabular format
+
+```{r}
+DT::datatable(daily_incidence)
+```
+
+As an alternative to the above, we can examine weekly incidence.
+
+```{r}
+ggplot(data = daily_incidence %>%
+         filter(date >= '2016-12-01') %>%
+         mutate(year = as.numeric(format(date, '%Y')),
+                week = as.numeric(format(date, '%U'))) %>%
+         group_by(year, week) %>%
+         mutate(date = min(date)) %>%
+         ungroup %>%
+         group_by(date) %>%
+         summarise(k = sum(positives) / mean(denominator) * 1000),
+       aes(x = date,
+           y = k)) +
+  geom_line(alpha = 0.6) +
+  theme_cism() +
+  labs(x = 'Date',
+       y = 'Cases per 1,000 population',
+       title = 'Weekly incidence through PCD',
+       subtitle = 'All positive cases divided by entire population')
+```
+
+### By age group
+
+We cannot examine incidence by age, because no birth data exists for children > 5, so age specific incidence cannot be calculated for older age groups. It is also unclear from the census data if the entire adult population was censed or not.
+
+### By spray status
+
+```{r}
+
+village_denom <- census %>%
+  group_by(village = village_number) %>%
+  tally
+
+village_num <-
+  pcd %>%
+  group_by(date = visit_date,
+           village) %>%
+  summarise(positives = length(which(tdr_res == 'Positive')))
+
+x <- 
+  left_join(x = village_num,
+            y = village_denom) %>%
+  # Make weekly
+  mutate(year = as.numeric(format(date, '%Y')),
+                week = as.numeric(format(date, '%U'))) %>%
+         group_by(year, week) %>%
+         mutate(date = min(date)) %>%
+         ungroup %>%
+  group_by(village, date) %>%
+  summarise(positives = sum(positives),
+            n = mean(n)) %>%
+  mutate(k = positives / n * 1000)
+
+# Get spray status
+x <- x %>%
+  left_join(ss %>%
+              rename(village = village_number))
+
+# Group by spray status
+x <- x %>%
+  group_by(spray_status,
+           date) %>%
+  summarise(positives = sum(positives),
+            n = sum(n)) %>%
+  mutate(k = positives / n * 1000)
+
+ggplot(data = x %>%
+         filter(date >= '2016-12-01',
+                !is.na(spray_status)),
+       aes(x = date,
+           y = k)) +
+  geom_area(alpha = 0.6,
+            fill = 'darkblue') +
+  facet_wrap(~spray_status, nrow = 2) +
+  labs(x = 'Date',
+       y = 'Cases per 1,000',
+       title = 'Weekly incidence by spray status') +
+  theme_cism()
+
+ggplot(data = x %>%
+         filter(date >= '2016-12-01',
+                !is.na(spray_status)),
+       aes(x = date,
+           y = k,
+           color = spray_status)) +
+  geom_line(alpha = 0.6) +
+  labs(x = 'Date',
+       y = 'Cases per 1,000',
+       title = 'Weekly incidence by spray status') +
+  theme_cism()
+
+
+```
+
+
+
+# Active case detection data
+
+## Prevalence and incidence calculations
+
+We can calculate incidence and prevalence for ACD data as well. For this, our denominator consists of only those children recruited for the study.
+
+PROBLEM: We currently cannot calculate ACD incidence, because there are no visit dates. We can only do prevalence. The below table shows the `had_malaria` variable.
+
+```{r}
+table(acd$had_malaria)
+  
+
+
+# Denominator here, unlike PCD, is only those recruited (target = 1548)
+# (ie only those in the acd dataset)
+# No age group differentiation
+
+# BY SPRAY STATUS
+# EVENTUALLY BY TIME
+```
+
+## Breakdown of spray status per data collected
+
+```{r}
+cism_plot(x = factor(ifelse(is.na(acd$spray), 'NA', acd$spray))) +
+  labs(x = 'Spray',
+       title = 'Spray status per data collected')
+```
+
+## Breakdown of test restuls
+
+```{r}
+# 4 = not done
+cism_plot(x = factor(ifelse(is.na(acd$test_result), 'NA', acd$test_result))) +
+  labs(x = 'Test result',
+       title = 'Test restuls')
+```
+
+## Not yet finished analyses
+
+If not treated, why.
+
+If write-in, what were the write-ins
+
+## Malaria prevalence
+
+Which variables to use for this?
+
+## Maps of prevalence in cohorts superimposed on spray status maps
+
+Need more guidance on what "prevalence in cohorts means"
+
+## Net ownership vs. malaria prevalence
+
+`undernet_sleep` vs. `undernet_sleeps`
+
+```{r, echo = TRUE}
+# NEED TO RENAME THESE VARIABLES
+# Undernet_Sleep - How many times the child sleeps under mosquito net during rainy season!
+# Undernet_Sleeps - How many times the child sleeps under mosquito net during dry season!
+
+table(acd$undernet_sleep)
+table(acd$undernet_sleeps)
+table(acd$undernet_sleep,
+      acd$undernet_sleeps)
+
+```
+
+# Ad-hoc requests
+
+## Age of ACD participants
+
+
+```{r}
+clean_perm_id <- function(perm_id){
+  x <- strsplit(perm_id, '-')
+  y <- lapply(x, 
+         function(x){
+           as.numeric(as.character(x))
+         })
+  z <- lapply(y, function(a){
+    paste0(a, collapse = '-')
+  })
+  zz <- unlist(z)
+  return(zz)
+}
+# Get age from census
+left <- acd %>%
+  mutate(id = clean_perm_id(perm_id = perm_id))  %>%
+  dplyr::select(-dob)
+right <- master_table %>%
+              mutate(id = clean_perm_id(permid)) %>%
+  mutate(in_census = TRUE)
+x <- left_join(left, right, by = 'id') %>%
+  mutate(ifelse(is.na(in_census), FALSE, in_census))
+# write_csv(x %>% filter(is.na(dob)), '~/Desktop/empty_acd.csv')
+
+ggplot(data = x,
+       aes(x = dob)) +
+  geom_histogram(alpha = 0.6,
+                 fill = 'darkgreen') +
+  theme_cism() +
+  labs(x = 'Date of birth',
+       y = 'Count',
+       title = 'Distribution of dates of birth',
+       subtitle = 'ACD participants')
+
+```
+
+As an alternative to the above, we can explore age (in months).
+
+```{r}
+x$months <- as.numeric(as.Date('2017-01-12') - x$dob) / (365.25 / 12)
+
+ggplot(data = x,
+       aes(x = months)) +
+  geom_histogram(alpha = 0.6,
+                 fill = 'darkgreen') +
+  theme_cism() +
+  labs(x = 'Months of age',
+       y = 'Count',
+       title = 'Distribution of ages',
+       subtitle = 'ACD participants') +
+geom_vline(xintercept = seq(0, 72, by= 12),
+           lty = 2,
+           alpha = 0.5)
+```
+
+
+## Details on person 116-7014-0015-02
+
+```{r}
+pid <- '116-7014-0015-02'
+# clean_perm_id(pid) %in% clean_perm_id(master_table$permid)
+this_person <- master_table %>%
+  filter(clean_perm_id(pid) == clean_perm_id(permid )) %>%
+  mutate(status = ifelse(status, 'Spray', 'No spray'))
+
+DT::datatable(this_person)
+```
+
+```{r}
+plot(zam_sp)
+points(this_person$lng,
+       this_person$lat)
+```
+
+```{r}
+library(leaflet)
+master_table_sp <- master_table
+coordinates(master_table_sp) <- ~lng+lat
+proj4string(master_table_sp) <- proj4string(zam_sp)
+master_table_sp@data$xx <- master_table_sp@data$permid == this_person$permid
+# this_person_sp <- this_person
+# coordinates(this_person_sp) <- ~lng+lat
+# mapview::mapview(master_table_sp,
+#                  color = ifelse(master_table_sp@data$xx, 'red', 'blue'))
+
+colors <- ifelse(master_table_sp@data$xx, 'red', 'blue')
+ll <- 
+  leaflet() %>%
+  addProviderTiles("OpenStreetMap.Mapnik") %>%
+  addCircleMarkers(lng = master_table$lng,
+    lat = master_table$lat,
+    color = colors,
+    fillColor = colors,
+    radius = 2.5,
+    opacity = 0,
+    fillOpacity = 0.5,
+    popup = paste0('Household: ', master_table$house_number, ' Village number: ',
+    master_table$village_number)) %>%
+    addLegend("bottomright", 
+              colors = c('red', 'blue'),
+              labels = c(paste0('This person'), 
+                         'Others'),
+    title = '',
+    opacity = 1 ) %>%
+  addCircleMarkers(lng = this_person$lng,
+    lat = this_person$lat,
+    color = 'red',
+    fillColor = 'red',
+    radius = 2.5,
+    opacity = 0,
+    fillOpacity = 0.5,
+    popup = paste0('Household: ', this_person$house_number, ' Village number: ',
+    this_person$village_number))
+ll
+```
