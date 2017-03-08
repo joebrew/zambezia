@@ -111,13 +111,16 @@ load('census.RData')
 
 if('cross_sectional.RData' %in% dir('backups')){
   load('backups/cross_sectional.RData') 
+  load('backups/cross_sectional_target_numbers.RData')
   } else {
     
-    set.seed(123)
+  set.seed(123)
   # Get households by cluster
   selected <- 
     census %>%
                 dplyr::select(uri, 
+                              household_number,
+                              health_facility,
                               cluster,
                               lng,
                               lat,
@@ -125,10 +128,10 @@ if('cross_sectional.RData' %in% dir('backups')){
                               village,
                   cluster,
                   head_name,
-                  health_facility,
                   local_village_name,
                   number_of_children,
-                  number_of_residents) %>%
+                  number_of_residents,
+                  administrative_post) %>%
     mutate(number_of_adults = number_of_residents - number_of_children) %>%
     # Bring in the cluster info to children
     left_join(clusters %>%
@@ -142,6 +145,8 @@ if('cross_sectional.RData' %in% dir('backups')){
     filter(!within_1k_voronoi_buffer) 
   # Randomly re-shuffle order
   selected <- selected[sample(1:nrow(selected), nrow(selected)),]
+  
+  
   
   # # Get the kids that are in each house
   # right <- children %>%
@@ -173,7 +178,7 @@ if('cross_sectional.RData' %in% dir('backups')){
                   -village)
   
   # Perform a random selection, stratifying by cluster size
-  vals <- rep(c(121, 122, 122), 2)
+  vals <- rep(c(128, 128, 129), 2)
   counter <- 0
   # Get a random_selection
   results <- list()
@@ -203,7 +208,10 @@ if('cross_sectional.RData' %in% dir('backups')){
     selected %>%
     group_by(cluster) %>%
     summarise(n_houses_in_cluster = length(unique(uri)),
-              size = first(size)) %>%
+              size = first(size),
+              villages = paste0(unique(local_village_name), collapse = ', '),
+              health_facilities = paste0(unique(health_facility), collapse = ', '),
+              administrative_posts = paste0(unique(administrative_post), collapse = ', ')) %>%
     left_join(
       pseudo_selected %>%
         group_by(cluster) %>%
@@ -250,158 +258,10 @@ if('cross_sectional.RData' %in% dir('backups')){
 save(selected, file = paste0('backups/cross_sectional_',
                              Sys.Date(),
                              '.RData'))
-save(target_number, file = paste0('backups/cross_sectional_target_numbers_',
+save(target_numbers, file = paste0('backups/cross_sectional_target_numbers_',
                              Sys.Date(),
                              '.RData'))
-
-# } 'cross_sectional_adults.RData' %in% dir('backups') &
-#    'cross_sectional_children.Rdata' %in% dir('backups')){
-#   load('backups/cross_sectional_children.Rdata')
-#   load('backups/cross_sectional_adults.Rdata')
-# } else {
-    
-#   selected_children <- 
-#     children %>%
-#     # Get cluster number
-#     left_join(census %>%
-#                 dplyr::select(uri, 
-#                               cluster,
-#                               lng,
-#                               lat,
-#                               within_1k_voronoi_buffer,
-#                               village,
-#                   cluster,
-#                   head_name,
-#                   health_facility,
-#                   local_village_name),
-#               by = c('parent_auri'='uri')) %>%
-#     # Bring in the cluster info to children
-#     left_join(clusters %>%
-#                 dplyr::select(cluster,
-#                               size,
-#                               spray_status),
-#               by = 'cluster') %>%
-#     # Filter out those whose spray status is not known
-#     filter(!is.na(spray_status)) %>%
-#     # Filter out those who are not in the core area
-#     filter(!within_1k_voronoi_buffer) 
-#   # Randomly re-shuffle order
-#   set.seed(123)
-#   selected_children <- selected_children[sample(1:nrow(selected_children),
-#                                                 nrow(selected_children)),]
-#   
-#   # Don't keep any duplicates from the same house
-#   selected_children <-
-#     selected_children %>%
-#     filter(!duplicated(house_number))
-#   
-#   # Group by size of cluster and get equal numbers per cluster
-#   sizes <- unique(selected_children$size)
-#   ns <- c(128, 128, 129)
-#   results_list <- list()
-#   for (i in 1:length(sizes)){
-#     sub_data <- selected_children %>%
-#       filter(size == sizes[i]) %>%
-#       sample_n(ns[i])
-#     results_list[[i]] <- sub_data
-#   }
-#   selected_children <- bind_rows(results_list)
-#   
-#   ###########################
-#   # Do the same for adults
-#   selected_adults <- 
-#     census %>%
-#     # Make sure to not get any from the houses of the children selected
-#     filter(!house_number %in% selected_children$house_number) %>%
-#     # Bring in the cluster info to children
-#     left_join(clusters %>%
-#                 dplyr::select(cluster, size,
-#                               spray_status),
-#               by = 'cluster') %>%
-#     # Filter out those whose spray status is not known
-#     filter(!is.na(spray_status)) %>%
-#     # Filter out those who are not in the core area
-#     filter(!within_1k_voronoi_buffer) 
-#   # Randomly re-shuffle order
-#   set.seed(123)
-#   selected_adults <- selected_adults[sample(1:nrow(selected_adults),
-#                                                 nrow(selected_adults)),]
-#   
-#   # Don't keep any duplicates from the same house
-#   selected_adults <-
-#     selected_adults %>%
-#     filter(!duplicated(house_number))
-#   # Group by size of cluster and get equal numbers per cluster
-#   sizes <- unique(selected_adults$size)
-#   ns <- c(128, 128, 129)
-#   results_list <- list()
-#   for (i in 1:length(sizes)){
-#     sub_data <- selected_adults %>%
-#       filter(size == sizes[i]) %>%
-#       sample_n(ns[i])
-#     results_list[[i]] <- sub_data
-#   }
-#   selected_adults <- bind_rows(results_list) %>%
-#     mutate(number_of_adults = number_of_residents - number_of_children)
-#   # Get a specific person
-#   selected_adults$person_number <- NA
-#   for (i in 1:nrow(selected_adults)){
-#     selected_adults$person_number[i] <- 
-#       sample(1:selected_adults$number_of_adults[i],
-#              1)
-#   }
-#   selected_adults <-
-#     selected_adults %>%
-#     dplyr::select(uri, 
-#                   village,
-#                   house_number,
-#                   cluster,
-#                   head_name,
-#                   lng,
-#                   lat,
-#                   health_facility,
-#                   local_village_name,
-#                   number_of_adults,
-#                   person_number)
-#   
-#   
-#   cross_sectional_children <- selected_children
-#   cross_sectional_adults <- selected_adults
-#    save(cross_sectional_children, file = 'cross_sectional_children.Rdata')
-#    save(cross_sectional_adults, file = 'cross_sectional_adults.Rdata')
-# }
-# 
-#    save(cross_sectional_children, file =
-#           paste0('backups/cross_sectional_children_',
-#                  Sys.Date(),
-#                  '.Rdata'))   
-#    save(cross_sectional_adults, file =
-#           paste0('backups/cross_sectional_adults_',
-#                  Sys.Date(),
-#                  '.Rdata'))
-#    
-plot(mop2)
-points(cross_sectional_children$lng,
-       cross_sectional_children$lat,
-       col = alpha('darkgreen', 0.5),
-       cex = 0.6)
-
-points(cross_sectional_adults$lng,
-       cross_sectional_adults$lat,
-       col = alpha('darkred', 0.5),
-       cex = 0.6)
-legend('bottomleft',
-       col = alpha(c('darkgreen', 'darkred'), 0.5),
-       cex = 0.6,
-       legend = c('Adults', 'Children'),
-       pch = 1)
-
-# Write csvs for carlos
-write_csv(cross_sectional_children, 'backups/cross_sectional_children.csv')
-
-write_csv(cross_sectional_adults, 'backups/cross_sectional_adults.csv')
 ```
-
 
 # Passive case detection data
 
@@ -450,7 +310,6 @@ ggplot(data = x %>%
   scale_color_manual(name = '',
                      values = c('darkorange', 'darkgreen'))
 ```
-
 
 The below table shows the above chart's raw numbers.
 
@@ -786,6 +645,8 @@ ggplot(data = or_df_week,
   ylim(0, 2)
 ```
 
+
+
 ## Analysis by health facility
 
 ```{r}
@@ -920,36 +781,6 @@ ggplot() +
 ```
 
 
-```{r, eval = FALSE}
-# Do spline interpolation with the akima package
-fld = with(x %>%
-             filter(!is.na(p_positive)), interp(x = lng, y = lat, 
-                     z = p_positive, 
-                     duplicate="median",
-                                                              xo=seq(min(zam$long), 
-                                                                     max(zam$long), length = 100),
-                            yo=seq(min(zam$lat), max(zam$lat), length = 100),
-                            extrap=TRUE, linear=FALSE))
-melt_x = rep(fld$x, times=length(fld$y))
-melt_y = rep(fld$y, each=length(fld$x))
-melt_z = as.vector(fld$z)
-level_data = data.frame(longitude=melt_x, latitude=melt_y, APPT=melt_z)
-interp_data = na.omit(level_data)
-grid_points = SpatialPoints(interp_data[,1:2])
-# grid_points = SpatialPoints(interp_data[,2:1])
-
-proj4string(grid_points)<- proj4string(zam_sp)
-in_points = !is.na(over(grid_points,zam_sp))
-inside_points = interp_data[in_points, ]
-
-ggplot(data=inside_points, 
-       aes(x=longitude, y=latitude)) + 
-  geom_tile(aes(fill=APPT)) + 
-  stat_contour(aes(z=APPT)) +
-  coord_equal() + 
-  scale_fill_gradient2(low="blue",mid="white",high="red", midpoint=mean(inside_points$APPT)) # + borders
-```
-
 The below map shows a smoothed, rasterized surface for positivity rate. Krieging is used to achieve interpolated estimates. Unlike the previous map, here we model a _rate_, which should be independent of population density.
 
 ```{r}
@@ -1035,8 +866,6 @@ ggplot(data=interp_data, aes(x=longitude, y=latitude)) +
 ### Overall
 
 ```{r}
-load('census.RData')
-
 daily_incidence <-
   pcd %>%
   group_by(date = visit_date) %>%
@@ -1149,13 +978,17 @@ ggplot(data = x %>%
                 !is.na(spray_status)),
        aes(x = date,
            y = k,
-           color = spray_status)) +
-  geom_line(alpha = 0.6) +
+           fill = spray_status)) +
+  # geom_line(alpha = 0.6) +
+  geom_bar(stat = 'identity',
+           position = 'dodge',
+           alpha = 0.6) +
   labs(x = 'Date',
        y = 'Cases per 1,000',
        title = 'Weekly incidence by spray status') +
-  theme_cism()
-
+  theme_cism() +
+  scale_fill_manual(name = 'Spray\nstatus',
+                     values = c('darkblue', 'darkorange'))
 
 ```
 

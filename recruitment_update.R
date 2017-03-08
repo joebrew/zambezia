@@ -5,7 +5,7 @@ library(readr)
 library(yaml)
 
 # Read an old file just to get headers
-headers <- read_csv('data/COSTMopeia_DATA_2017-01-31_1018.csv')[0,]
+headers <- read_csv('data/COSTMopeia_DATA_2017-03-08_1751.csv')[0,]
 
 # See what recruitment data we already have
 files <- dir('data/')
