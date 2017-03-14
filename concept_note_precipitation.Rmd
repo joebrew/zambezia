@@ -1,0 +1,68 @@
+---
+title: "Malaria, precipitation, and health-seeking behavior"
+subtitle: "Concept note"
+author: "Joe Brew and Carlos Chaccour"
+date: "`r Sys.Date()`"
+output:
+  tufte::tufte_html: default
+  tufte::tufte_handout:
+    citation_package: natbib
+    latex_engine: xelatex
+  tufte::tufte_book:
+    citation_package: natbib
+    latex_engine: xelatex
+bibliography: bibliography.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tufte)
+# invalidate cache when the tufte version changes
+knitr::opts_chunk$set(tidy = FALSE, cache.extra = packageVersion('tufte'))
+options(htmltools.dir.version = FALSE)
+```
+
+
+<center>
+
+
+# *Executive summary  
+
+
+<em>
+It's raining, which causes mosquitos.
+
+There are mosquitos, which cause malaria.
+
+Malaria infects someone, who seeks treatment...
+
+...unless it's raining.
+
+</em>
+</center>
+
+# Why
+
+Climate is a well-known causal correlate for the reproduction, survival, and behavior of the malaria-carrying _anopholes_ mosquito [@Craig1999]. Just as the weather affects mosquito behavior, so too does it influence human behavior. However, the extent to which health-seeking behavior, particularly the seeking of malaria diagnosis and treatment, is effected by weather has never been examined. 
+
+Estimates of the burden of malaria largely rely on passive case detection [@Sachs2002, @Snow2005]. However, these estimates are probably biased by the fact that precipitation - which increases the risk of malaria - may also decrease the likelihood of seeking care for malaria. This bias is most likely worse in impoverished and isolated areas, where the burden of malaria is greatest. Understanding how precipitation affects human health-seeking behavior, therefore, is crucial to estimating the burden of malaria.
+
+# What
+
+Using data from the COST trial^[Cross sectional malaria study, PATH, CISM], we will carry out an analysis of the determinants of health-seeking behavior, with a focus on the role that precipitation plays in the likelihood of a malaria-infected individual to seek care.^[adjusting for socioeconomic status, proximity to care center, and other sociodemographic confounders.] By combining and analyzing differential malaria detection rates using two distinct identification strategies (active vs. passive surveillance), as well as granular weather data^[Climate Hazards Group - CHIRPS], we will model the effect of precipitation on the likelihood of seeking care.^[(taking into account time lags)] Our results will have the potential to inform future studies in regards to epidemiological surveillance, as well as provide a framework for a retrospective analysis of previous burden of malaria estimates using historically available meteorological data.
+
+
+# How
+
+All data required for this analysis are currently being collected. No budget or resources are required.^[The only "cost" of this analysis is researcher time; in the case of Joe Brew, his time is already covered by his doctoral grant]
+
+# Who
+
+Joe Brew will lead the analysis and manuscript writing. Carlos Chaccour will provide high-level insight and content expertise. Co-authors will consist of any relevant collaborators from the COST trial.
+
+# When
+
+- March-Summer, 2017: Data collection, surveillance, and live analysis
+- August, 2017: Manuscript writing
+- September, 2017: Internal revisions
+- October, 2017: Submission for publication

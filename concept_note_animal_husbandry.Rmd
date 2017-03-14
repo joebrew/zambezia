@@ -1,0 +1,64 @@
+---
+title: "Malaria risk and animal husbandry"
+subtitle: "Concept note"
+author: "Joe Brew and Carlos Chaccour"
+date: "`r Sys.Date()`"
+output:
+  tufte::tufte_html: default
+  tufte::tufte_handout:
+    citation_package: natbib
+    latex_engine: xelatex
+  tufte::tufte_book:
+    citation_package: natbib
+    latex_engine: xelatex
+bibliography: bibliography.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tufte)
+# invalidate cache when the tufte version changes
+knitr::opts_chunk$set(tidy = FALSE, cache.extra = packageVersion('tufte'))
+options(htmltools.dir.version = FALSE)
+```
+
+
+<center>
+
+
+# Executive summary  
+
+
+<em>
+Pigs make you rich.
+
+Pigs make you sick.
+
+Being sick makes you poor.
+
+</em>
+</center>
+
+# Why
+
+Very little research has been on the effect of animal husbandry on malaria risk. A South African study found that owning animals increased one's risk of malaria by 2,000%, but it was observational, used a small sample ^[121], was not representative^[Only one village, only women], may have been effected by recall bias, and did not fully adjust for socioeconomic factors [@Mutegeki2016]. A 2012 study in Zambezia found that owning pigs was associated with a 3-fold increased risk of malaria[@Temu2012]^[even after adjustment for income]. However, even though the result was "significant"^[p < 0.05], it is not clear whether the association may have been spurious^[ie, it needs to be reproduced], nor have its causal and public health implications been explored
+
+# What
+
+Using data from the COST trial^[Cross sectional malaria study, PATH, CISM], we will carry out an analysis of the socioeconomic and demographic risk factors for malaria, with a focus on the role that animal husbandry may play. Our results will either confirm or contradict the previous study's finding of pigs as a risk factor. Though our primary analysis is epidemiological, secondary analysis will be economic in nature, exploring the cost-benefit ratio of animal husbandry in the Zambezia context, after taking into account the financial and health costs of malaria risk.
+
+
+# How
+
+All data required for this analysis are currently being collected. No budget or resources are required.^[The only "cost" of this analysis is researcher time; in the case of Joe Brew, his time is already covered by his doctoral grant]
+
+# Who
+
+Joe Brew will lead the analysis and manuscript writing. Carlos Chaccour will provide high-level insight and content expertise. Co-authors will consist of any relevant collaborators from the COST trial.
+
+# When
+
+- March-Summer, 2017: Data collection, surveillance, and live analysis
+- August, 2017: Manuscript writing
+- September, 2017: Internal revisions
+- October, 2017: Submission for publication
