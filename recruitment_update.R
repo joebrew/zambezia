@@ -5,7 +5,8 @@ library(readr)
 library(yaml)
 
 # Read an old file just to get headers
-headers <- read_csv('data/COSTMopeia_DATA_2017-03-08_1751.csv')[0,]
+# headers <- read_csv('data/COSTMopeia_DATA_2017-03-08_1751.csv')[0,]
+headers <- read_csv('data/COSTMopeia_DATA_2017-03-24_1021.csv')[0,]
 
 # See what recruitment data we already have
 files <- dir('data/')
@@ -40,16 +41,19 @@ the_file <- the_file[1]
 master <- read_csv(paste0('data/',
                           the_file),
                    col_names = FALSE)
-names(master) <- names(headers); rm(headers)
+names(master)[1:ncol(headers)] <- names(headers); rm(headers)
+no_name <- length(which(is.na(names(master))))
 
 # Read in geogrpahic and demographic data
 master_table <- read_csv("~/Documents/zambezia/master_table_for_carlos.csv")
 
 # Get spray status
-ss <- master_table %>% group_by(village_number) %>%
-  filter(!is.na(status)) %>%
-  summarise(spray_status = dplyr::first(status)) %>%
-  mutate(spray_status = ifelse(spray_status, 'Spray', 'No spray'))
+ss <- master_table %>% 
+  dplyr::filter(!is.na(status)) %>%
+  dplyr::group_by(village_number) %>%
+  dplyr::summarise(spray_status = dplyr::first(status)) 
+ss <- ss %>%
+  dplyr::mutate(spray_status = ifelse(spray_status, 'Spray', 'No spray'))
 
 # Join spray status to df
 master <- master %>%
@@ -63,12 +67,14 @@ master <- master %>%
 
 # Break into arms
 arms <- sort(unique(master$redcap_event_name))
+# Remove acd_arm_1 (there's only 1)
+# arms <- arms[arms != 'acd_arm_1']
 for (i in 1:length(arms)){
   df <- master %>% filter(redcap_event_name == arms[i])
   remove_these <- rep(NA, ncol(df))
   for (j in 1:ncol(df)){
     remove_these[j] <-
-      all(is.na(df[,j]))
+      (length(which(is.na(df[,j]))) / nrow(df)) >= 0.99
   }
   df <- df[,!remove_these]
   assign(gsub('_arm_1', '', arms[i]),
@@ -76,11 +82,28 @@ for (i in 1:length(arms)){
 }
 rm(df)
 
+# Get agregardos 
+agregados <- master %>%
+  filter(!is.na(village)) %>%
+  dplyr::select(record_id, village) %>%
+  filter(!duplicated(record_id))
+
+# Get visit dates
+right <- master %>%
+  filter(!is.na(acd_visit_date))
+
 # Combine both acds
-acd <- bind_rows(acd, 
-             acd_children)
+acd <- full_join(acd, acd_children,
+               by = c('record_id' = 'parent_uri'))
+# acd <- bind_rows(acd,
+#              acd_children)
 
 # Remove duplicates
 acd <- acd[!duplicated(acd$perm_id),]
 rm(acd_children)
+
+# # Get into acd the agregado
+# acd <- left_join(acd,
+#                  agregados,
+#                  by = c('parent_uri' = 'record_id'))
 

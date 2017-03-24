@@ -1,8 +1,18 @@
 ---
 title: "Recruitment update"
 author: "Carlos Chaccour, Joe Brew"
-date: "February 1, 2017"
-output: html_document
+date: "`r paste0(format(Sys.time(), '%d %B, %Y at %H:%M:%S'), '. Time zone: ', Sys.timezone())`"
+fig_height: 2.6
+fig_width: 4
+output:
+  html_document:
+    pandoc_args: [
+      "+RTS", "-K16000m",
+      "-RTS"
+    ]
+    toc: true
+    toc_float: true
+    theme: sandstone
 ---
 
 ```{r setup, include=FALSE}
@@ -10,8 +20,9 @@ knitr::opts_chunk$set(comment = NA,
                echo = FALSE, 
                warning = FALSE, 
                message = FALSE, 
-               error = TRUE, 
-               cache = FALSE)
+               error = TRUE, # Render report, even with errors
+               cache = F)
+
 library(tidyverse)
 library(cism)
 library(data.table)
@@ -783,7 +794,7 @@ ggplot() +
 
 The below map shows a smoothed, rasterized surface for positivity rate. Krieging is used to achieve interpolated estimates. Unlike the previous map, here we model a _rate_, which should be independent of population density.
 
-```{r}
+```{r, results = 'hide'}
 # Krieging
 sp_df <- x
 coordinates(sp_df) <- ~lng + lat
@@ -836,6 +847,9 @@ map_base = geom_polygon(data=zam_sp, map_base_aesthetics)
 borders = geom_polygon(data=zam_sp, map_base_aesthetics, color="black", fill=NA)
 
 nbin=20
+```
+
+```{r}
 
 ggplot(data=interp_data, aes(x=longitude, y=latitude)) + 
   # geom_polygon(data = zam, aes(x = long,
@@ -857,7 +871,6 @@ ggplot(data=interp_data, aes(x=longitude, y=latitude)) +
   # coord_equal()
   # # geom_point(data=sub_data,color="black",size=0.3)
 ```
-
 
 
 
@@ -907,7 +920,8 @@ ggplot(data = daily_incidence %>%
          summarise(k = sum(positives) / mean(denominator) * 1000),
        aes(x = date,
            y = k)) +
-  geom_line(alpha = 0.6) +
+  geom_area(alpha = 0.6,
+            color = 'black') +
   theme_cism() +
   labs(x = 'Date',
        y = 'Cases per 1,000 population',
@@ -966,7 +980,8 @@ ggplot(data = x %>%
        aes(x = date,
            y = k)) +
   geom_area(alpha = 0.6,
-            fill = 'darkblue') +
+            fill = 'darkblue',
+            color = 'black') +
   facet_wrap(~spray_status, nrow = 2) +
   labs(x = 'Date',
        y = 'Cases per 1,000',
@@ -992,28 +1007,419 @@ ggplot(data = x %>%
 
 ```
 
+The below line chart is the same as the above bar chart.
 
+```{r}
+ggplot(data = x %>%
+         filter(date >= '2016-12-01',
+                !is.na(spray_status)),
+       aes(x = date,
+           y = k,
+           color = spray_status)) +
+  geom_line(alpha = 0.6) +
+  labs(x = 'Date',
+       y = 'Cases per 1,000',
+       title = 'Weekly incidence by spray status') +
+  theme_cism() +
+  scale_color_manual(name = 'Spray\nstatus',
+                     values = c('darkblue', 'darkorange'))
+```
+
+The below line chart is the same as the above, but it shows _cumulative_ incidence, rather than week-specific.
+
+```{r}
+x <- x %>%
+  arrange(date) %>%
+  group_by(spray_status) %>%
+  mutate(k_cum = cumsum(k)) %>%
+  ungroup
+ggplot(data = x %>%
+         filter(date >= '2016-12-01',
+                !is.na(spray_status)),
+       aes(x = date,
+           y = k_cum,
+           color = spray_status)) +
+  geom_line(alpha = 0.6) +
+  labs(x = 'Date',
+       y = 'Cases per 1,000',
+       title = 'Cumulative incidence by spray status') +
+  theme_cism() +
+  scale_color_manual(name = 'Spray\nstatus',
+                     values = c('darkblue', 'darkorange'))
+```
+
+As an alternative to the above, we can also examine the week-specific reduction in incidence associated with spraying:
+
+```{r}
+y <- x %>%
+   filter(date >= '2016-12-01',
+        !is.na(spray_status)) %>%
+  dplyr::group_by(date) %>%
+  dplyr::summarise(difference = dplyr::first(k[spray_status == 'Spray']) - 
+             dplyr::first(k[spray_status == 'No spray']),
+             Cases = sum(n)) 
+
+ggplot(data = y,
+       aes(x = date,
+           y = difference)) +
+  geom_point(aes(size = Cases),
+             alpha = 0.5) +
+  geom_line(alpha = 0.6) +
+  theme_cism() +
+  geom_hline(yintercept = 0, lty = 2) +
+  labs(x = 'Week',
+       y = 'Incidence difference per 1,000',
+       title = 'Difference in weekly incidence',
+       subtitle = 'Per 1,000, spray minus no spray')
+```
 
 # Active case detection data
+
+```{r}
+# The ACD data, like the census data, use incorrect permids in those cases of permids containing "-7116-". 
+
+# The "fix" is to replace the house number section of the "permid" column of those permids containing 7116 with the equivalent portion from the "house_number" column.
+
+# However, since the "agregado" is also collected in ACD data, we can apply the same transformation that we apply to the census to get the "corrected" permid.
+
+# Maybe use family id?
+
+acd$kid_number <- unlist(lapply(strsplit(acd$perm_id, '-'), function(x){x[4]}))
+children$kid_number <- unlist(lapply(strsplit(children$permid, '-'), function(x){x[4]}))
+
+# Match up family ids
+children$family_id <-
+  unlist(lapply(strsplit(children$permid, '-'), function(x){paste0(x[1:3], collapse = '-')}))
+
+# Perform the fix
+acd$village_correct <- 
+  unlist(lapply(strsplit(acd$family_id, '-'), function(x){x[2]}))
+acd$perm_id <- 
+  paste0(unlist(lapply(strsplit(acd$perm_id, '-'), function(x){x[1]})),
+         '-',
+         acd$village_correct,
+         '-',
+  unlist(lapply(strsplit(acd$perm_id, '-'), function(x){paste0(x[3:4], collapse = '-')})))
+
+
+# THERE ARE STILL MORE CORRECTIONS TO DO HERE
+# For now, removing duplicates in ACD.
+# After we make the right corrections, there will hopefully be no duplicates in ACD or children
+acd <- acd %>%
+  filter(!duplicated(perm_id))
+children <- children %>%
+  filter(!duplicated(permid))
+
+acd$perm_id <- clean_perm_id(acd$perm_id)
+children$permid <- clean_perm_id(children$permid)
+
+# Get location into acd using census
+acd$house_number <-
+  unlist(lapply(strsplit(acd$perm_id, '-'), function(x){paste0(x[1:3], collapse = '-')}))
+acd <- acd[!is.na(acd$perm_id),]
+acd <- acd %>%
+  mutate(house_number = clean_perm_id(house_number)) %>%
+  left_join(census %>%
+              dplyr::select(house_number,
+                            lng,
+                            lat) %>%
+              mutate(house_number = clean_perm_id(house_number)),
+            by = 'house_number')
+
+# # Get location into acd using children dataset
+# acd <- acd %>%
+#   dplyr::select(-house_number) %>%
+#   mutate(perm_id = clean_perm_id(perm_id)) %>%
+#   left_join(children %>%
+#               mutate(perm_id = clean_perm_id(permid)) %>%
+#               dplyr::select(perm_id, status,
+#                             parent_auri),
+#             by = 'perm_id')
+```
+
+## Map of ACD
+
+The below is a map of ACD activity, with each point colored by RDT result.
+
+```{r}
+cism_map_interactive(lng = acd$lng,
+                     lat = acd$lat,
+                     x = ifelse(acd$had_malaria == 1, 
+                                'Positive', 
+                                'Negative'),
+                     popup = paste0('perm-id: ', acd$perm_id),
+                     spdf = zam_sp)
+```
+
+## Risk maps
+
+There are still problems with matching the `perm_id`s from the ACD dataset with the census. `r length(which(is.na(acd$lng)))` of `nrow(acd)` ACD study observations have no location associated with them.
+
+
+```{r, results = 'hide'}
+# Define function for risk map
+risk_map <- function(data = acd,
+                     map = zam_sp){
+  
+  # Jitter the data
+  data <- data %>%
+    mutate(lng = jitter(lng, factor = 50),
+           lat = jitter(lat, factor = 50))
+  
+  # Group by location and get overall
+  grouped <- data %>%
+    group_by(lng, lat) %>%
+    summarise(cases = sum(had_malaria == 1),
+              population = n()) %>%
+    ungroup %>%
+    mutate(pk = cases / population * 100) %>%
+    filter(!is.na(lng), 
+           !is.na(lat))
+  
+  # Perform kriging
+  # Krieging
+  sp_df <- grouped
+  coordinates(sp_df) <- ~lng + lat
+  proj4string(sp_df) <- proj4string(map)
+  sp_df <- sp_df[!is.na(sp_df$pk),]
+  sp_points <- SpatialPoints(sp_df)
+  
+  # Create a fine grid
+  pixels_per_side = 150
+  bottom.left = bbox(map)[,1]  #apply(sp_points@coords,2,min)
+  top.right = bbox(map)[,2] #apply(sp_points@coords,2,max)
+  margin = abs((top.right-bottom.left))/10
+  bottom.left = bottom.left-margin
+  top.right = top.right+margin
+  pixel.size = abs(top.right-bottom.left)/pixels_per_side
+  g = GridTopology(cellcentre.offset=bottom.left,
+                   cellsize=pixel.size,
+                   cells.dim=c(pixels_per_side,pixels_per_side))
+  
+  grid_points = SpatialPoints(g)
+  proj4string(grid_points) <- proj4string(map)
+  in_points = !is.na(over(grid_points,polygons(map)))
+  fit_points = SpatialPoints(as.data.frame(grid_points)[in_points,])
+  proj4string(fit_points) <- proj4string(map)
+  
+  # make projected before krieging
+  new_pro <- CRS("+init=epsg:3036")
+  proj4string(fit_points) <-
+    proj4string(map) <- 
+    proj4string(sp_df) <- new_pro
+  
+  # Do kriging
+  krig = autoKrige(pk~1, sp_df, new_data=fit_points)
+  interp_data = as.data.frame(krig$krige_output)
+  colnames(interp_data) = c("longitude","latitude","pred","var","stdev")
+  
+  # Set up map plot
+  map_base_aesthetics = aes(x=longitude, y=latitude, group=group)
+  map_base = geom_polygon(data=map, map_base_aesthetics)
+  borders = geom_polygon(data=map, map_base_aesthetics, color="black", fill=NA)
+  
+  # Fortify map
+  map_fortified <- broom::tidy(map)
+  
+  nbin=20
+  
+  g <-
+    ggplot(data=interp_data, aes(x=longitude, y=latitude)) + 
+    geom_polygon(data = map_fortified, aes(x = long,
+             y = lat,
+             # z = p_positive,
+             group = group),
+             alpha = 0.6) +
+    # coord_map() +
+    geom_tile(aes(fill=pred),color=NA) +
+    # stat_contour(aes(z=pred), bins=nbin, color="#999999") +
+    scale_fill_gradient2(name = '%',
+                         # midpoint=mean(interp_data$pred),
+                         # limits = c(0, 100),
+                         # midpoint = 300,
+                         low="white",
+                         mid="yellow",
+                         high="red") +
+    # borders +
+    theme_cism() +
+    labs(title = '',
+         subtitle = 'Interpolated average weekly positivity rate, Krieging method',
+         x = 'Longitude',
+         y = 'Latitude')
+  return(g)
+}
+
+
+# Create a week column in acd
+date_start <- as.Date(min(acd$acd_visit_date))
+date_end <- as.Date(max(acd$acd_visit_date))
+
+date_helper <-
+  tibble::data_frame(date = seq(date_start,
+                                date_end,
+                                by = 1)) %>%
+  mutate(dow = weekdays(date)) %>%
+  filter(date >= '2016-10-01') %>%
+  mutate(week = as.character(NA))
+for (i in 1:nrow(date_helper)){
+  this_week <- date_helper$date[i]
+  this_dow <- date_helper$dow[i]
+  while(this_dow != 'Monday'){
+    this_week <- this_week - 1
+    this_dow <- weekdays(this_week)
+  }
+  date_helper$week[i] <- as.character(this_week)
+}
+date_helper$week <- as.Date(date_helper$week)
+
+acd <- 
+  acd %>%
+  left_join(date_helper,
+            by = c('acd_visit_date' = 'date'))
+  
+weeks <- sort(unique(acd$week))
+
+
+for (i in 1:length(weeks)){
+  message(i)
+  data <- acd %>%
+    filter(week == weeks[i])
+  try({
+      r <- risk_map(data = data,
+           map = zam_sp) +
+    labs(title = weeks[i])
+  assign(paste0('g', i),
+         r)
+  })
+
+}
+```
+
+
+### Overall ACD positivity rate
+
+```{r, results = 'hide'}
+x <- risk_map(data = acd,
+           map = zam_sp) +
+  labs(title = 'ACD risk map')
+```
+
+```{r}
+x
+```
+
+### Week-specific ACD positivity rates
+
+```{r, fig.width=8}
+Rmisc::multiplot(g1,
+                 g2,
+                 g3,
+                 g4,
+                 cols = 2)
+```
+
+```{r, eval = FALSE}
+# ANIMATION
+for (i in 1:length(weeks)){
+  x <- get(paste0('g', i))
+  print(x)
+  Sys.sleep(0.5)
+
+  ggsave(paste0('animation/', i, '.png'))
+}
+
+```
+
 
 ## Prevalence and incidence calculations
 
 We can calculate incidence and prevalence for ACD data as well. For this, our denominator consists of only those children recruited for the study.
 
-PROBLEM: We currently cannot calculate ACD incidence, because there are no visit dates. We can only do prevalence. The below table shows the `had_malaria` variable.
+### Overall malaria positivity
 
 ```{r}
-table(acd$had_malaria)
-  
+x <- acd %>%
+  group_by(malaria = ifelse(had_malaria == 1, 'Positive', 'Negative')) %>%
+  tally %>%
+  ungroup %>%
+  filter(!is.na(malaria)) %>%
+  mutate(p = n / sum(n) * 100)
 
-
-# Denominator here, unlike PCD, is only those recruited (target = 1548)
-# (ie only those in the acd dataset)
-# No age group differentiation
-
-# BY SPRAY STATUS
-# EVENTUALLY BY TIME
+ggplot(data = x,
+       aes(x = malaria,
+           y = n)) +
+  geom_bar(stat = 'identity',
+           color = 'black',
+           fill = 'darkorange',
+             alpha = 0.6) +
+  theme_cism() +
+  labs(title = 'Malaria status in ACD',
+       subtitle = paste0(nrow(acd), ' ACD participants'),
+       x = 'Test result',
+       y = 'Children') +
+  geom_label(aes(label = paste0(round(p, digits = 2), '%')))
 ```
+
+### Weekly incidence
+
+```{r}
+weekly_incidence <- 
+  acd %>%
+  group_by(week) %>%
+  summarise(positives = length(which(had_malaria == 1)),
+            n = n()) %>%
+  ungroup %>%
+  mutate(p = positives / n * 1000) %>%
+  filter(!is.na(week)) %>%
+  mutate(negatives = n - positives) %>%
+  filter(n > 5)
+
+ggplot(data = weekly_incidence,
+       aes(x = week,
+           y = p)) +
+  geom_area(fill = 'darkorange',
+            alpha = 0.6,
+            color = 'black') +
+  labs(title = 'Weekly incidence of malaria per ACD data',
+       subtitle = 'Per 1,000, denominator is only those in ACD',
+       x = 'Week',
+       y = 'Incidence per 1k') +
+  theme_cism()
+```
+
+### Incidence by spray status
+
+```{r}
+x <- acd %>%
+  group_by(week,
+           spray = ifelse(spray == 1, 'Spray', 'No spray')) %>%
+  summarise(positives = length(which(had_malaria == 1)),
+            n = n()) %>%
+  ungroup %>%
+  mutate(p = positives / n * 1000) %>%
+  filter(!is.na(week)) %>%
+  mutate(negatives = n - positives) %>%
+  filter(n > 5) %>%
+  rename(People = n)
+
+cols <- colorRampPalette(brewer.pal(9, 'Spectral'))(length(unique(x$spray)))
+ggplot(data = x,
+       aes(x = week,
+           y = p,
+           group = spray,
+           color = spray)) +
+  geom_line() +
+  geom_point(aes(size = People),
+             alpha = 0.5) +
+  labs(title = 'Weekly incidence of malaria per ACD data',
+       subtitle = 'Per 1,000, denominator is only those in ACD',
+       x = 'Week',
+       y = 'Incidence per 1k') +
+  theme_cism() +
+  scale_color_manual(name = 'Status',
+                     values = cols)
+```
+
 
 ## Breakdown of spray status per data collected
 
@@ -1042,13 +1448,7 @@ If write-in, what were the write-ins
 
 Which variables to use for this?
 
-## Maps of prevalence in cohorts superimposed on spray status maps
-
-Need more guidance on what "prevalence in cohorts means"
-
 ## Net ownership vs. malaria prevalence
-
-`undernet_sleep` vs. `undernet_sleeps`
 
 ```{r, echo = TRUE}
 # NEED TO RENAME THESE VARIABLES
