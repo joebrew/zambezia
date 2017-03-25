@@ -883,7 +883,7 @@ daily_incidence <-
   pcd %>%
   group_by(date = visit_date) %>%
   summarise(positives = length(which(tdr_res == 'Positive'))) 
-daily_incidence$denominator <- nrow(census)
+daily_incidence$denominator <- nrow(children)
 
 daily_incidence$k <- daily_incidence$positives / daily_incidence$denominator * 1000
 
@@ -891,12 +891,13 @@ ggplot(data = daily_incidence %>%
          filter(date >= '2016-12-01'),
        aes(x = date,
            y = k)) +
-  geom_line(alpha = 0.6) +
+  geom_bar(stat = 'identity',
+           alpha = 0.6) +
   theme_cism() +
   labs(x = 'Date',
        y = 'Cases per 1,000 population',
        title = 'Incidence through PCD',
-       subtitle = 'All positive cases divided by entire population')
+       subtitle = 'Positive < 5 cases divided by all < 5')
 
 ```
 
@@ -929,6 +930,53 @@ ggplot(data = daily_incidence %>%
        subtitle = 'All positive cases divided by entire population')
 ```
 
+Alternatively, we can examine the data at the monthly level.
+
+```{r}
+ggplot(data = daily_incidence %>%
+         filter(date >= '2016-12-01') %>%
+         mutate(year = as.numeric(format(date, '%Y')),
+                week = as.numeric(format(date, '%U')),
+                month = as.numeric(format(date, '%m'))) %>%
+         group_by(year, month) %>%
+         mutate(date = min(date)) %>%
+         ungroup %>%
+         group_by(date) %>%
+         summarise(k = sum(positives) / mean(denominator) * 1000),
+       aes(x = date,
+           y = k)) +
+  geom_bar(stat = 'identity', 
+           alpha = 0.6,
+            color = 'black') +
+  theme_cism() +
+  labs(x = 'Date',
+       y = 'Cases per 1,000 population',
+       title = 'Montyly incidence through PCD',
+       subtitle = 'All positive cases divided by entire population')
+```
+
+For true incidence, we can calculate the cumulative number of cases for the period of time divided by the population times time.
+
+```{r, echo = TRUE}
+x <- daily_incidence %>%
+         filter(date >= '2016-12-01') 
+years_at_risk <- length(unique(x$date))/365.25
+
+# Make yearly
+
+overall_incidence <- 
+  ((x %>%
+  summarise(total = sum(positives)) %>%
+  unlist) / 
+  # divided by person-months at risk
+  (years_at_risk *
+  nrow(children))) * 1000
+```
+
+The **annual extrapolated incidence** (under 5) is `r x$overall_incidence` infections per 1,000 children-years (not taking into account seasonality).
+
+
+
 ### By age group
 
 We cannot examine incidence by age, because no birth data exists for children > 5, so age specific incidence cannot be calculated for older age groups. It is also unclear from the census data if the entire adult population was censed or not.
@@ -937,7 +985,7 @@ We cannot examine incidence by age, because no birth data exists for children > 
 
 ```{r}
 
-village_denom <- census %>%
+village_denom <- children %>%
   group_by(village = village_number) %>%
   tally
 
@@ -947,9 +995,17 @@ village_num <-
            village) %>%
   summarise(positives = length(which(tdr_res == 'Positive')))
 
+#
+left <- expand.grid(date = seq(min(village_num$date),
+                               max(village_num$date),
+                               by = 1),
+                    village = village_denom$village)
+village_num <- full_join(left, village_num)
+village_num$positives[is.na(village_num$positives)] <- 0
+
 x <- 
-  left_join(x = village_num,
-            y = village_denom) %>%
+  left_join(x = village_denom,
+            y = village_num) %>%
   # Make weekly
   mutate(year = as.numeric(format(date, '%Y')),
                 week = as.numeric(format(date, '%U'))) %>%
@@ -1073,9 +1129,39 @@ ggplot(data = y,
        subtitle = 'Per 1,000, spray minus no spray')
 ```
 
+We can also calculate overall extrapolated annual incidence (as per above), by spray status
+
+```{r}
+y <- x %>%
+         filter(date >= '2016-12-01') 
+# years_at_risk <- as.numeric(diff(range(y$date)))/365.25
+
+# Make yearly
+x <-
+  y %>%
+  group_by(spray_status) %>%
+  summarise(cases = sum(positives, na.rm = TRUE),
+            population = mean(n, na.rm = TRUE)) %>%
+  ungroup %>%
+  mutate(yearly_incidence = cases / (years_at_risk * population) * 1000)
+
+```
+
+The **annual extrapolated incidence** (under 5) per 1,000 children-years (not taking into account seasonality). (Population figures need to be adjusted)
+
+```{r}
+x
+```
+
 # Active case detection data
 
 ```{r}
+# TO DO: Incorporate all the followup data into ACD.
+# Create a chart with x as date and y as person time at risk (line for at risk, red line for infected, no line for lost or not yet tracked) showing 1500 horizontal lines
+# add symbols for events (death, lost, etc.)
+# Calculate incidence using cases / person time at risk, applying the removal of
+# time NOT at risk due to events, censure, etc.
+
 # The ACD data, like the census data, use incorrect permids in those cases of permids containing "-7116-". 
 
 # The "fix" is to replace the house number section of the "permid" column of those permids containing 7116 with the equivalent portion from the "house_number" column.
@@ -1135,6 +1221,18 @@ acd <- acd %>%
 #               dplyr::select(perm_id, status,
 #                             parent_auri),
 #             by = 'perm_id')
+```
+
+```{r}
+# To do: when they have malaria, they are no longer at risk for 15 days
+# They get visited once monthly
+# Overall, we want 
+  # - cases: 
+  # - denominator: child-time at risk (take out child-time not at risk)
+# Make a survival line plot
+
+ggplot(data = acd,
+       )
 ```
 
 ## Map of ACD
