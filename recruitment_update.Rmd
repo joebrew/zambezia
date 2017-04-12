@@ -1680,3 +1680,132 @@ ll <-
     this_person$village_number))
 ll
 ```
+
+# Map for each village
+
+```{r}
+kids <- children %>%
+  left_join(census %>%
+              dplyr::select(uri,
+                            lng,
+                            lat,
+                            locality_Final) %>%
+              rename(locality = locality_Final),
+            by = c('parent_auri'='uri'))
+kids$color <- ifelse(kids$status, 'red', 'blue')
+
+
+villages <- sort(unique(kids$village_number))
+localities <- sort(unique(kids$locality))
+cols <- colorRampPalette(brewer.pal(9, 'Spectral'))(length(villages))
+cols <- sample(cols, length(cols))
+
+locality_cols <- colorRampPalette(brewer.pal(9, 'Spectral'))(length(localities))
+locality_cols <- sample(locality_cols, length(locality_cols))
+
+kids$village_color <- cols[as.numeric(factor(kids$village_number))]
+kids$locality_color <- locality_cols[as.numeric(factor(kids$locality))]
+
+pdf('~/Desktop/villages_by_gps.pdf',
+    width = 11,
+    height = 8.5)
+for (i in 1:length(villages)){
+  par(mfrow = c(1,2))
+  this_village <- villages[i]
+  these_kids <- kids %>%
+    filter(village_number == this_village)
+  this_locality <- paste0(sort(unique(these_kids$locality)), collapse = ', ')
+  plot(zam_sp,
+       main = paste0('Village ', this_village, ', locality: ',
+                     this_locality
+                     ))
+  points(these_kids$lng,
+         these_kids$lat,
+         pch = 3,
+         col = adjustcolor(these_kids$color, alpha.f = 0.6),
+         cex = 0.4)
+  plot(these_kids$lng,
+       these_kids$lat,
+        pch = 3,
+         col = adjustcolor(these_kids$color, alpha.f = 0.6),
+         cex = 0.4,
+       main = paste0('Village ', this_village,
+                           ' zoom-in'),
+       xlab = 'Longitude',
+       ylab = 'Latitude')
+  legend('topright',
+         col = c('red', 'blue'),
+         pch = 3,
+         legend = c('Spray', 'No spray'),
+         title = 'Assigned status',
+         cex = 0.4)
+  # Sys.sleep(1)
+}
+dev.off()
+par(mfrow = c(1,1))
+
+
+pdf('~/Desktop/localities_by_gps.pdf',
+    width = 11,
+    height = 8.5)
+for (i in 1:length(localities)){
+    par(mfrow = c(1,2))
+  this_locality <- localities[i]
+  these_kids <- kids %>%
+    filter(locality == this_locality)
+  these_villages <- paste0(sort(unique(these_kids$village_number)),
+                           collapse = ',')
+  plot(zam_sp,
+       main = paste0('Locality ', this_locality))
+  points(these_kids$lng,
+         these_kids$lat,
+         pch = 3,
+         col = adjustcolor(these_kids$village_color, alpha.f = 0.6),
+         cex = 0.4)
+  plot(these_kids$lng,
+       these_kids$lat,
+        pch = 3,
+         col = adjustcolor(these_kids$village_color, alpha.f = 0.6),
+         cex = 0.4,
+       main = paste0('Village ', this_village,
+                           ' zoom-in'),
+       xlab = 'Longitude',
+       ylab = 'Latitude')
+
+}
+dev.off()
+par(mfrow = c(1,1))
+
+l <- leaflet() %>%
+  # addTiles() %>%
+  addProviderTiles('Esri.WorldImagery') %>%
+  addCircles(lng = kids$lng,
+             lat = kids$lat,
+             col = kids$village_color,
+             popup = paste0('Village: ',
+                            kids$village_number,
+                            ' | permid: ',
+                            kids$permid))
+
+l2 <- leaflet() %>%
+  addTiles() %>%
+  # addProviderTiles('Esri.WorldImagery') %>%
+  addCircles(lng = kids$lng,
+             lat = kids$lat,
+             col = kids$locality_color,
+             popup = paste0('Locality: ',
+                            kids$locality,
+                            ' | Village: ',
+                            kids$village_number,
+                            ' | permid: ',
+                            kids$permid))
+
+# Create a village number / locality table
+village_locality <- 
+  kids %>%
+  arrange(locality, village_number) %>%
+  filter(!duplicated(village_number)) %>%
+  dplyr::select(locality, village_number)
+write_csv(village_locality,
+          'village_locality_matchup.csv')
+```
