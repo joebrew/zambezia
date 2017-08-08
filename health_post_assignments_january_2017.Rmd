@@ -1,0 +1,271 @@
+---
+title: "Cluster selection: January 2017 modifications"
+author: "Joe Brew"
+fig_width: 4
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+fig_height: 2.6
+---
+```{r, echo = FALSE, warning = FALSE, message = FALSE, comment = NA, error= FALSE, cache = FALSE}
+# No scientific notation
+options(scipen=999)
+
+# Packages 
+library(xtable)
+library(knitr)
+library(ggplot2) 
+# library(dplyr)
+library(rgeos)
+library(RColorBrewer)
+library(Rmisc)
+# Libraries
+library(rgdal)
+library(raster)
+library(sp)
+library(leaflet)
+library(ggmap)
+library(readxl)
+library(dplyr)
+library(readr)
+library(geosphere)
+
+# Basic knitr options
+opts_chunk$set(comment = NA, 
+               echo = FALSE, 
+               warning = FALSE, 
+               message = FALSE, 
+               error = TRUE, # Render report, even with errors
+               cache = F)
+
+# Helpers
+source('lib/get_zambezia.R')
+source('lib/helpers.R')
+```
+
+```{r setup, include=FALSE, echo = FALSE}
+library(knitr)
+knit_engines$set(asis = function(options) {
+  if (options$echo && options$eval) knit_child(text = options$code)
+})
+```
+
+
+Given logistical / operational challenges, we are removing clusters 119 and 58 from our selection. This means that both Mungane and Sangalaza need replacement clusters, taken from previously unselected clusters. This also means that new children will need to be randomly added for each of those clusters.
+
+```{r, message=FALSE}
+# Read in some saved objects from the December doc
+# Save clusters and census for january revisions
+load('selected_clusters.RData')
+load('children.RData')
+load('census.RData')
+
+# Read in the master table, produced in the "health_post_assignments.Rmd"
+master_table <- read_csv('master_table_for_carlos.csv')
+
+# Read in the recruitment table, from the same document
+recruitment_table <- read_csv("final_recruitment_table_by_group.csv")
+
+# Remove anything from cluster 119
+master_table <- master_table %>%
+  filter(cluster != 119)
+recruitment_table <-
+  recruitment_table %>%
+  filter(cluster != 119)
+
+# Remove anything from cluster 58
+master_table <- master_table %>%
+  filter(cluster != 58)
+recruitment_table <-
+  recruitment_table %>%
+  filter(cluster != 58)
+
+```
+
+## New cluster for Mungane
+
+The below map shows the eligible clusters (originally assigned to Posto Campo, but not selected in the randomization). Click for more details on each cluster.
+
+```{r}
+# Pick a non-selected cluster from posto campo for Mungane
+possible_picks <-
+  clusters %>%
+  filter(closest_health_facility == 'CENTRO DE SAUDE DE POSTO CAMPO',
+         !clusters$selected) %>%
+  mutate(x = lng,
+         y = lat)
+possible_picks_sp <- possible_picks
+coordinates(possible_picks_sp) <- ~x+y
+proj4string(possible_picks_sp) <- CRS("+proj=longlat +ellps=WGS84 +datum=WGS84")
+
+
+# Generate map of possible picks
+leaflet(possible_picks_sp) %>%
+    addProviderTiles('Esri.WorldImagery') %>%   
+  addCircleMarkers(popup = paste0('Cluster: ',
+                                  possible_picks_sp$cluster))
+```
+
+The cluster numbers are `r paste0(possible_picks$cluster, collapse = ', ')`. We non-randomly choose cluster 88.
+
+```{r}
+set.seed(999)
+selected <- 88 #sample(possible_picks$cluster, 1)
+```
+
+The children in the "core" area of our selected cluster (`r selected`) are below. Each child gets a number from 1 onwards, which can be used for the randomization (`random_id`).
+
+```{r}
+x <- children %>%
+  dplyr::select(-house_number,
+                -village_number,
+                -status) %>%
+  left_join(census,
+            by = c('parent_auri' = 'uri')) %>%
+  filter(cluster == selected) %>%
+    mutate(in_core = !within_1k_voronoi_buffer_spray) %>%
+  filter(in_core) %>%
+  mutate(LOCALIDADE = locality_Final,
+                     BAIRRO = local_village_name,
+         random_id = NA) %>%
+  mutate(spray_status = ifelse(status, 'Spray', 'No spray')) %>%
+    mutate(health_facility = 'CENTRO DE SAUDE DE MUNGANE')
+y <- x
+x <- x[,c(names(recruitment_table))]
+set.seed(234)
+x$random_id <- sample(1:nrow(x), nrow(x), replace = FALSE)
+x <- x %>% arrange(random_id)
+DT::datatable(x)
+
+# Add to the recruitment table
+recruitment_table <-
+  rbind(recruitment_table,
+        x)
+new_children <- x
+```
+
+Here is a map of the children in the new cluster.
+
+```{r}
+x_sp <- y
+coordinates(x_sp) <- ~gpc_lng+gpc_lat
+proj4string(x_sp) <- CRS("+proj=longlat +ellps=WGS84 +datum=WGS84")
+leaflet(x_sp) %>%
+    addProviderTiles('Esri.WorldImagery') %>%   
+  addCircleMarkers(popup = paste0('Cluster: ',
+                                  x_sp$cluster,
+                                  ' | HH number: ',
+                                  x_sp$household_number))
+```
+
+
+
+## New cluster for Sangalaza
+
+The below map shows the previously non-selected for Sangalaza. Click for more details on each cluster.
+
+```{r}
+
+# Pick a non-selected cluster from posto campo for Mungane
+possible_picks <-
+  clusters %>%
+  filter(closest_health_facility == 'CENTRO DE SAUDE DE SANGALAZA',
+         !clusters$selected) %>%
+  mutate(x = lng,
+         y = lat)
+possible_picks_sp <- possible_picks
+coordinates(possible_picks_sp) <- ~x+y
+proj4string(possible_picks_sp) <- CRS("+proj=longlat +ellps=WGS84 +datum=WGS84")
+
+
+# Generate map of possible picks
+# Generate map of possible picks
+leaflet(possible_picks_sp) %>%
+    addProviderTiles('Esri.WorldImagery') %>%   
+  addCircleMarkers(popup = paste0('Cluster: ',
+                                  possible_picks_sp$cluster))
+```
+
+The cluster numbers are `r paste0(possible_picks$cluster, collapse = ', ')`.
+
+```{r}
+set.seed(999)
+selected <- sample(possible_picks$cluster, 1)
+```
+
+We randomly select one. It is cluster number `r selected`. The children in the "core" area of our selected cluster are below. Each child gets a number from 1 onwards, which can be used for the randomization (`random_id`).
+
+```{r}
+x <- children %>%
+  dplyr::select(-house_number,
+                -village_number,
+                -status) %>%
+  left_join(census,
+            by = c('parent_auri' = 'uri')) %>%
+  filter(cluster == selected) %>%
+    mutate(in_core = !within_1k_voronoi_buffer_spray) %>%
+  filter(in_core) %>%
+  mutate(LOCALIDADE = locality_Final,
+                     BAIRRO = local_village_name,
+         random_id = NA) %>%
+  mutate(spray_status = ifelse(status, 'Spray', 'No spray')) %>%
+  mutate(health_facility = 'CENTRO DE SAUDE DE SANGALAZA')
+y <- x
+x <- x[,c(names(recruitment_table))]
+
+set.seed(234)
+x$random_id <- sample(1:nrow(x), nrow(x), replace = FALSE)
+x <- x %>% arrange(random_id)
+DT::datatable(x)
+
+# Add to the recruitment table
+recruitment_table <-
+  rbind(recruitment_table,
+        x)
+new_children <- 
+  rbind(new_children,
+        x)
+```
+
+Here is a map of the children in the new cluster.
+
+```{r}
+x_sp <- y
+coordinates(x_sp) <- ~gpc_lng+gpc_lat
+proj4string(x_sp) <- CRS("+proj=longlat +ellps=WGS84 +datum=WGS84")
+leaflet(x_sp) %>%
+    addProviderTiles('Esri.WorldImagery') %>%   
+  addCircleMarkers(popup = paste0('Cluster: ',
+                                  x_sp$cluster,
+                                  ' | HH number: ',
+                                  x_sp$household_number))
+```
+
+# List of new incorporations
+
+```{r}
+new_children <- new_children %>%
+  arrange(health_facility, 
+          cluster,
+          random_id)
+DT::datatable(new_children)
+write_csv(new_children, 'new_children_jan_11_modifications.csv')
+```
+
+## Master list
+
+Having removed the problematic clusters, selected new ones, and assigned `random_id` numbers to the children in the new clusters, we can re-generate our master recruitment table (ie, the table with all core children).
+
+```{r}
+recruitment_table <- recruitment_table %>%
+  arrange(health_facility, 
+          cluster,
+          random_id)
+DT::datatable(recruitment_table)
+write_csv(recruitment_table, 'recruitment_table_with_jan_11_modifications.csv')
+```
+

@@ -111,7 +111,7 @@ pcd$visit_date <- as.Date(pcd$visit_date)
 ```{r}
 # Get participants for the cross
 
-# Read in some saved objects from the December doc
+# Read in some saved objects from the December  
 # Save clusters and census for january revisions
 load('selected_clusters.RData')
 load('children.RData')

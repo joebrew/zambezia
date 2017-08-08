@@ -4,44 +4,46 @@ library(tidyverse)
 library(readr)
 library(yaml)
 
+master <- read_csv('data/cost-mopeia.csv')
+
 # Read an old file just to get headers
 # headers <- read_csv('data/COSTMopeia_DATA_2017-03-08_1751.csv')[0,]
 headers <- read_csv('data/COSTMopeia_DATA_2017-03-24_1021.csv')[0,]
 
-# See what recruitment data we already have
-files <- dir('data/')
-files <- files[grepl('NOHDRS', files)]
-file_dates <- as.Date(substr(files, 24, 33))
-file_times <- as.numeric(substr(files, 35, 38))
-
-# Get most recent file
-the_date <- max(file_dates)
-
-# Retrieve recent data if old
-# Make sure to be in the zambezia virtualenv first
-
-if(the_date < Sys.Date()){
-  system('python get_new_data.py')
-  # Re-look at the files
-  files <- dir('data/')
-  files <- files[grepl('NOHDRS', files)]
-  file_dates <- as.Date(substr(files, 24, 33))
-  file_times <- as.numeric(substr(files, 35, 38))
-}
-
-the_file <- files[file_dates == the_date]
-
-if(length(the_file) > 1){
-  the_file_times <- file_times[file_dates == max(file_dates)]
-  the_file <- the_file[the_file_times == max(the_file_times)]
-}
-the_file <- the_file[1]
-
-# Read  
-master <- read_csv(paste0('data/',
-                          the_file),
-                   col_names = FALSE)
-names(master)[1:ncol(headers)] <- names(headers); rm(headers)
+# # See what recruitment data we already have
+# files <- dir('data/')
+# files <- files[grepl('NOHDRS', files)]
+# file_dates <- as.Date(substr(files, 24, 33))
+# file_times <- as.numeric(substr(files, 35, 38))
+# 
+# # Get most recent file
+# the_date <- max(file_dates)
+# 
+# # Retrieve recent data if old
+# # Make sure to be in the zambezia virtualenv first
+# 
+# if(the_date < Sys.Date()){
+#   system('python get_new_data.py')
+#   # Re-look at the files
+#   files <- dir('data/')
+#   files <- files[grepl('NOHDRS', files)]
+#   file_dates <- as.Date(substr(files, 24, 33))
+#   file_times <- as.numeric(substr(files, 35, 38))
+# }
+# 
+# the_file <- files[file_dates == the_date]
+# 
+# if(length(the_file) > 1){
+#   the_file_times <- file_times[file_dates == max(file_dates)]
+#   the_file <- the_file[the_file_times == max(the_file_times)]
+# }
+# the_file <- the_file[1]
+# 
+# # Read  
+# master <- read_csv(paste0('data/',
+#                           the_file),
+#                    col_names = FALSE)
+# names(master)[1:ncol(headers)] <- names(headers); rm(headers)
 no_name <- length(which(is.na(names(master))))
 
 # Read in geogrpahic and demographic data

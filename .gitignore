@@ -5,3 +5,16 @@ credentials.yaml
 /redcap
 *.html
 .Rproj.user
+*.csv
+*.rds
+*.png
+*.zip
+*.xlsx
+*.xls
+*.jpg
+*.pdf
+/animation
+/data
+/dropbox
+/gifs
+/lost_clusters
