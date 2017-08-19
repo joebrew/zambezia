@@ -533,12 +533,21 @@ or_df <- data_frame(or = ors[2],
                     lwr = ci[2,1],
                     upr = ci[2,2])
 
+# Add in the number of cases, etc.
+or_df$positive <- 
+
 # Round
 for (j in 1:ncol(or_df)){
   or_df[,j] <- round(or_df[,j], digits = 2)
 }
 
 DT::datatable(or_df)
+```
+
+The below is a table of the raw numbers.
+
+```{r}
+table(ifelse(pcd$tdr_res == 'Positive', 'Positive TDR', 'Negative TDR'), pcd$spray_status)
 ```
 
 ### Interpretation
@@ -973,7 +982,7 @@ overall_incidence <-
   nrow(children))) * 1000
 ```
 
-The **annual extrapolated incidence** (under 5) is `r x$overall_incidence` infections per 1,000 children-years (not taking into account seasonality).
+The **annual extrapolated incidence** (under 5) is `r overall_incidence` infections per 1,000 children-years (not taking into account seasonality).
 
 
 
@@ -1112,13 +1121,12 @@ y <- x %>%
         !is.na(spray_status)) %>%
   dplyr::group_by(date) %>%
   dplyr::summarise(difference = dplyr::first(k[spray_status == 'Spray']) - 
-             dplyr::first(k[spray_status == 'No spray']),
-             Cases = sum(n)) 
+             dplyr::first(k[spray_status == 'No spray']))
 
 ggplot(data = y,
        aes(x = date,
            y = difference)) +
-  geom_point(aes(size = Cases),
+  geom_point(
              alpha = 0.5) +
   geom_line(alpha = 0.6) +
   theme_cism() +
@@ -1129,7 +1137,7 @@ ggplot(data = y,
        subtitle = 'Per 1,000, spray minus no spray')
 ```
 
-We can also calculate overall extrapolated annual incidence (as per above), by spray status
+We can also calculate overall extrapolated annual incidence (as per above), by spray status.
 
 ```{r}
 y <- x %>%
@@ -1147,10 +1155,10 @@ x <-
 
 ```
 
-The **annual extrapolated incidence** (under 5) per 1,000 children-years (not taking into account seasonality). (Population figures need to be adjusted)
+The **annual extrapolated incidence** (under 5) per 1,000 children-years (not taking into account seasonality) is below. (Population figures need to be adjusted)
 
 ```{r}
-x
+DT::datatable(x)
 ```
 
 # Active case detection data
@@ -1341,7 +1349,7 @@ risk_map <- function(data = acd,
     # borders +
     theme_cism() +
     labs(title = '',
-         subtitle = 'Interpolated average weekly positivity rate, Krieging method',
+         subtitle = 'Interpolated average weekly positivity ',
          x = 'Longitude',
          y = 'Latitude')
   return(g)
@@ -1349,6 +1357,9 @@ risk_map <- function(data = acd,
 
 
 # Create a week column in acd
+acd$acd_visit_date[acd$acd_visit_date < '2015-01-01'] <-
+  acd$acd_visit_date[acd$acd_visit_date < '2015-01-01'] + 
+  lubridate::years(20)
 date_start <- as.Date(min(acd$acd_visit_date))
 date_end <- as.Date(max(acd$acd_visit_date))
 
@@ -1409,10 +1420,10 @@ x
 ### Week-specific ACD positivity rates
 
 ```{r, fig.width=8}
-Rmisc::multiplot(g1,
-                 g2,
-                 g3,
-                 g4,
+Rmisc::multiplot(g4,
+                 g5, 
+                 g6, 
+                 g7, 
                  cols = 2)
 ```
 

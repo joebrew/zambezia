@@ -1,0 +1,717 @@
+---
+title: "Publication-quality visualizations for Mopeia COST study"
+author: "Brew"
+date: '`r Sys.Date()`'
+output:
+  html_document: default
+  pdf_document: default
+self_contained: no
+subtitle: Reproducible code and output
+link-citations: yes
+---
+
+What follows is the code used for the generation of publication quality figures. Note that certain dependencies' source code are not included in this document (for example, references to other `R` scripts); in these cases, all code is available at https://github.com/joebrew/zambezia.
+
+
+
+```{r setup, include=FALSE}
+library(tufte)
+# invalidate cache when the tufte version changes
+knitr::opts_chunk$set(tidy = FALSE, cache.extra = packageVersion('tufte'))
+options(htmltools.dir.version = FALSE)
+
+knitr::opts_chunk$set(comment = NA, 
+               echo = TRUE, 
+               warning = FALSE, 
+               message = FALSE, 
+               error = TRUE, 
+               # fig.height = 5,
+               # fig.width = 8,
+               fig.align = 'center')
+
+```
+
+```{r}
+# Define theme for plotting
+# Borrowed from https://rpubs.com/Koundy/71792
+theme_publication <- function(base_size=14) {
+  library(grid)
+  library(ggthemes)
+  (theme_foundation(base_size=base_size)
+    + theme(plot.title = element_text(face = "bold",
+                                      size = rel(1.2), hjust = 0.5),
+            text = element_text(),
+            panel.background = element_rect(colour = NA),
+            plot.background = element_rect(colour = NA),
+            panel.border = element_rect(colour = NA),
+            axis.title = element_text(face = "bold",size = rel(1)),
+            axis.title.y = element_text(angle=90,vjust =2),
+            axis.title.x = element_text(vjust = -0.2),
+            axis.text = element_text(), 
+            axis.line = element_line(colour="black"),
+            axis.ticks = element_line(),
+            panel.grid.major = element_line(colour="#f0f0f0"),
+            panel.grid.minor = element_blank(),
+            legend.key = element_rect(colour = NA),
+            legend.position = "bottom",
+            legend.direction = "horizontal",
+            legend.key.size= unit(0.5, "cm"),
+            legend.margin = unit(0, "cm"),
+            legend.title = element_text(face="italic"),
+            plot.margin=unit(c(10,5,5,5),"mm"),
+            strip.background=element_rect(colour="#f0f0f0",fill="#f0f0f0"),
+            strip.text = element_text(face="bold")
+    ))
+}
+
+colors <- colorRampPalette(c('orange', 'red', 'darkgrey'))(3)
+
+scale_fill_publication <- function(...){
+  library(scales)
+  discrete_scale("fill",
+                 "Publication",
+                 manual_pal(values = colors
+                              # c("#386cb0","#fdb462","#7fc97f","#ef3b2c","#662506","#a6cee3","#fb9a99","#984ea3","#ffff33")
+                            ), ...)
+  
+}
+
+scale_colour_publication <- function(...){
+  library(scales)
+  discrete_scale("colour",
+                 "Publication",
+                 manual_pal(values = colors
+                            # c("#386cb0","#fdb462","#7fc97f","#ef3b2c","#662506","#a6cee3","#fb9a99","#984ea3","#ffff33")
+                            ), ...)
+  
+}
+
+compassRose<-function(x,y,rot=0,cex=1) {
+  oldcex<-par(cex=cex)
+  mheight<-strheight("M")
+  xylim<-par("usr")
+  plotdim<-par("pin")
+  xmult<-(xylim[2]-xylim[1])/(xylim[4]-xylim[3])*plotdim[2]/plotdim[1]
+  point.angles<-seq(0,7*pi/4,by=pi/4)+pi*rot/180
+  crspans<-rep(c(mheight*3,mheight/2),4)
+  xpoints<-cos(point.angles)*crspans*xmult+x
+  ypoints<-sin(point.angles)*crspans+y
+  polygon(xpoints,ypoints)
+  txtxpoints<-cos(point.angles[c(1,3,5,7)])*1.33*crspans[1]*xmult+x
+  txtypoints<-sin(point.angles[c(1,3,5,7)])*1.33*crspans[1]+y
+  text(txtxpoints,txtypoints,c("E","N","W","S"))
+  par(oldcex)
+}
+
+library(cism)
+library(sp)
+library(tidyverse)
+library(broom)
+library(maptools)
+library(RColorBrewer)
+library(ggrepel)
+library(GISTools)  
+library(maps)
+```
+
+# Figure 1: map of unidades sanitarias
+
+The below is a map of all the health facilities in Mopeia. I have not included an "inset" map with the location of Mopeia in Mozambique because this was not possible (to fit without overlapping, and being so small as to be unusable, etc). Instead, I've included a separate map which can be manually pasted on as an inset, if so desired.
+
+```{r, fig.width = 8, fig.height = 5}
+mop2 <- cism::mop2
+# us <- cism::us
+# us <- us %>% filter(!is.na(longitude))
+# coordinates(us) <- ~longitude+latitude
+# proj4string(us) <- proj4string(mop2)
+# us <- us[!is.na(over(us, polygons(mop2))),]
+
+us <- read.csv('unidades_sanitarias_cleaned.csv')
+# Make spatial
+us$x <- us$lng <- us$lon <- us$longitude <- us$gpc_lng
+us$y <- us$lat <- us$latitude <- us$gpc_lat
+coordinates(us) <- ~gpc_lng+gpc_lat
+proj4string(us) <- proj4string(mop2)
+us <- us[!is.na(over(us, polygons(mop2))),]
+
+
+plot(mop2)
+maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
+# north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
+compassRose(x=36.45, y=-18.15, cex = 0.5)
+# points(us, pch = 1)
+points(us, pch = "+")
+legend('topleft',
+       pch = "+",
+       legend = 'Health\nfacilities',
+       bty = 'n',
+       cex = 0.9)
+
+# par(usr=c(36.3, 36.4, -17., -17.7))
+# rect(xleft =36.3,ybottom = -17.79 ,xright = 36.4,ytop = -17.73,col = "white")
+# plot(moz3, add = TRUE)
+# map(mop2,add=T)
+```
+
+# Figure 1b: possible inset map
+
+```{r}
+plot(moz0)
+plot(mop2, col = 'darkred', add = TRUE, border = NA)
+```
+
+
+```{r bib, include=FALSE}
+# create a bib file for the R packages used in this document
+knitr::write_bib(c('base', 'rmarkdown'), file = 'skeleton.bib')
+```
+
+# Figure 2: Borders, etc.
+
+```{r}
+# Helpers
+source('lib/get_zambezia.R')
+source('lib/helpers.R')
+```
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE, comment = NA, error= FALSE, cache = FALSE}
+# No scientific notation
+options(scipen=999)
+
+# Packages 
+library(xtable)
+library(knitr)
+library(ggplot2) 
+# library(dplyr)
+library(rgeos)
+library(RColorBrewer)
+library(Rmisc)
+# Libraries
+library(rgdal)
+library(raster)
+library(sp)
+library(leaflet)
+library(ggmap)
+library(readxl)
+library(dplyr)
+library(readr)
+library(geosphere)
+
+# Basic knitr options
+opts_chunk$set(comment = NA, 
+               echo = FALSE, 
+               warning = FALSE, 
+               message = FALSE, 
+               error = TRUE, # Render report, even with errors
+               cache = F)
+
+# Helpers
+source('lib/get_zambezia.R')
+source('lib/helpers.R')
+
+#### READ IN AND CLEAN UP DATA
+
+# Read in final dataset, as given by Orvahlo on October 24, 2016
+# census <- read_excel('Limpesa_Final__241016_For maps.xlsx')
+# Read in corrected final dataset, sent by Edgar on October 30, 2016
+# census <- read_excel('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.xls')
+census <- read_csv('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.csv')
+# census <- read_csv('CensusMopeia_DATA_2016-11-11_1355.csv')
+# Fix weird header
+names(census)[6] <- 'locality_Final'
+
+# Get more nicely named geographic coordinate column names
+census$lat <- census$y <- census$latitude <- census$gpc_lat
+census$lon <- census$lng <- census$longitude <-census$x <- census$gpc_lng
+
+# Get a shapefile for Mozambique
+moz <- raster::getData('GADM', country = 'MOZ', level = 3)
+moz2 <- raster::getData('GADM', country = 'MOZ', level = 2)
+
+# GET CORRECT FINAL COLUMNS, AS EXPLAINED IN EMAIL
+# Get a village number
+census$village_number <- census$`village number_final`
+census$administrative_post <- census$administrative_post_final
+census$house_number <- census$houseno_Final_1
+census$locality <- census$locality_Final
+
+# Convert village number to numeric
+census$village_number <- 
+  as.numeric(as.character(census$village_number))
+
+# Get the corrected locality and bairro names sent by edgar on nov 7
+locality_corrections <- read_excel('Mapa Actualizado de bairros Censados_07_11-2016_Edgar-Revisao_FIN.xlsx', skip = 2)
+
+# Join to the census
+x <- 
+  census %>%
+  left_join(locality_corrections,
+            by = c('village_number' = 'CODIGO')) %>%
+  mutate(BAIRRO = toupper(BAIRRO))
+# Make updates
+x <- x %>%
+  mutate(administrative_post = 
+           ifelse(administrative_post != `POSTO ADMIN` & !is.na(`POSTO ADMIN`), 
+                  `POSTO ADMIN`, administrative_post),
+         locality = ifelse(locality != LOCALIDADE & !is.na(LOCALIDADE), 
+                           LOCALIDADE, locality),
+         local_village_name = ifelse(local_village_name != BAIRRO & !is.na(BAIRRO),
+                         BAIRRO, local_village_name)) %>%
+  dplyr::select(-`POSTO ADMIN`, LOCALIDADE, BAIRRO)
+# Overwite census
+census <- x
+rm(x)
+# Remove all NA rows
+census <- census %>%
+  filter(!is.na(lng),
+         !is.na(lat),
+         !is.na(village_number),
+         !is.na(house_number))
+
+
+# Save old version of census
+census_old <- census
+
+# Create a spatial version of census
+census_spatial <- census
+coordinates(census_spatial) <- ~x+y
+proj4string(census_spatial) <- proj4string(moz)
+
+# Subset the shapefile just to Zambezia
+zam <- moz[moz@data$NAME_1 == 'Zambezia',]
+
+# Subset further to just Mopeia
+mop <- moz2[moz2@data$NAME_2 == 'Mopeia',]
+
+# Save the original proj4string
+original_proj4string <- proj4string(moz)
+
+# Prepare ggmap-compatible objects
+zam_fortified <- fortify(zam, id = ID_3)
+mop_fortified <- fortify(mop, id = ID_3)
+zam_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+                               lat = mean(census$lat, na.rm = TRUE)),
+                  maptype = 'satellite')
+mop_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+                               lat = mean(census$lat, na.rm = TRUE)),
+                  maptype = 'satellite')
+
+# Switch to a projected format
+# Project
+census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
+mop <- spTransform(mop, CRS("+init=epsg:3347"))
+# Later, we can switch back to lat/long:
+census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
+mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
+# proj4string(mop_ll) <- proj4string(zam)
+
+# Read in data at the child-specific level
+children <- read_csv('redcap/CensusMopeia_DATA_2016-11-01_1734.csv')
+
+# Keep only those households with children
+children <- 
+  children %>%
+  filter(!is.na(perm_id_final)) %>%
+  mutate(permid = perm_id_final) %>%
+  dplyr::select(-perm_id_final)
+
+# Keep only those children which appear in the non-problematic census records
+children <-
+  children %>%
+  filter(parent_auri %in% census$uri) 
+
+# Keep only the columns of interest
+children <- 
+  children %>%
+  dplyr::select(permid,
+                dob,
+                name,
+                gender,
+                keeper,
+                parent_auri)
+
+# Get the household id
+children <-
+  children %>%
+  left_join(census %>% 
+              dplyr::select(house_number,
+                            village_number,
+                            uri),
+            by = c('parent_auri' = 'uri'))
+
+if('clean_maps_with_buffers_data.RData' %in% dir()){
+  load('clean_maps_with_buffers_data.RData')
+} else {
+  # Get spray status (will use for clusters too)
+  get_spray_status() # produces spray_village (village level) and spray_status (cluster level)
+  
+  # Make a dataframe of just villages (with cluster assignments)
+  village_df <- make_village_df(census = census,
+                                spray_village = spray_village)
+  
+  # Get a distance matrix (takes 2-3 minutes)
+  distance_matrix <- get_distance_matrix(spatial_ll_census = census_spatial_ll)
+  
+  # Identify problems
+  identify_problems()
+  census$problematic <- census$house_number %in% incorrect_houses
+  census_spatial$problematic <- census_spatial$house_number %in% incorrect_houses
+  census_spatial_ll$problematic <- census_spatial_ll$house_number %in% incorrect_houses
+  
+  # SUBSET TO REMOVE PROBLEMATIC
+  # Get distance matrix after subset
+  distance_matrix_old <- distance_matrix
+  distance_matrix <- distance_matrix[!census$problematic,
+                                         !census$problematic]
+  
+  # Identify the nearest neighbors of each house
+  nn <- nearest_neighbor(census_spatial_ll = census_spatial_ll,
+                             distance_matrix_old = distance_matrix_old,
+                             n = 5)
+  census$nearest_neighbors <- nn
+  census_old$nearest_neighbors <- nn
+  census_spatial$nearest_neighbors <- nn
+  census_spatial_ll$nearest_neighbors <- nn
+  
+  # Remove incorrect houses
+  census <- census[which(!census$house_number %in% incorrect_houses),]
+  census_spatial <- census_spatial[which(!census_spatial$house_number %in% incorrect_houses),]
+  census_spatial_ll <- census_spatial_ll[which(!census_spatial_ll$house_number %in% incorrect_houses),]
+  
+  village_df <- village_df %>% filter(!is.na(village_number),
+                                      !duplicated(village_number))
+
+  # Join spray status to objects
+  joiner <- 
+    village_df %>%
+                dplyr::select(village_number, cluster, status)
+  
+  census_spatial_ll@data <-
+    left_join(census_spatial_ll@data,
+              joiner,
+              by = 'village_number')
+  census_spatial@data <-
+    left_join(census_spatial@data,
+              joiner,
+              by = 'village_number')
+  census <-
+    left_join(census,
+              joiner,
+              by = 'village_number')
+  
+  # Get the voronoi tesselation surface
+  vv <- voronoi(spatial_census_ll = census_spatial_ll)
+  # Get the voronoi tesselation surface at the level of the spray zones
+  vv_spray <- voronoi_spray_level(spatial_census_ll = census_spatial_ll)
+  
+  # Get a non lat long version of voronoi surface
+  # For the village level
+  proj4string(vv) <- proj4string(census_spatial_ll)
+  vv_ll <- vv
+  vv <- sp::spTransform(vv, CRSobj = proj4string(census_spatial))
+  
+  # For the spray-level
+  proj4string(vv_spray) <- proj4string(census_spatial_ll)
+  vv_spray_ll <- vv_spray
+  vv_spray <- sp::spTransform(vv_spray, CRSobj = proj4string(census_spatial))
+    
+  # Get the buffered voronoi tesselation surface
+  vvb <- rgeos::gBuffer(vv,  # village level
+                        byid = TRUE, 
+                        id = vv$village_number,
+                        width = -1000)
+  vvb_spray <- rgeos::gBuffer(vv_spray,  # village level
+                        byid = TRUE, 
+                        id = vv$status,
+                        width = -1000)
+  
+  # Convert back to lat lon
+  vvb_ll <- spTransform(vvb, CRSobj = proj4string(census_spatial_ll))
+  vvb_ll_spray <- spTransform(vvb_spray, CRSobj = proj4string(census_spatial_ll))
+  
+  # Identify buffers voronoi
+  census_spatial_ll <- 
+    identify_buffers_voronoi(
+    census_spatial_ll = census_spatial_ll,
+           distance_matrix = distance_matrix,
+           vvb_ll = vvb_ll)
+  
+  # Identify buffers voronoi at spray level
+  census_spatial_ll <- 
+    identify_buffers_voronoi_spray_level(census_spatial_ll = census_spatial_ll,
+           distance_matrix = distance_matrix,
+           vvb_ll_spray = vvb_ll_spray)
+  
+  # Get buffers through distance to other villages
+  census_spatial_ll <- identify_buffers(spatial_ll_census = census_spatial_ll,
+                       distances = distance_matrix)
+  
+  # Update other objects with variables only in census_spatial_ll
+  update_other_objects()
+
+  # Save
+  save.image('clean_maps_with_buffers_data.RData')  
+}
+
+
+# Set all NA statuses to FALSE
+census$status[is.na(census$status)] <- FALSE
+census_spatial$status[is.na(census_spatial$status)] <- FALSE
+census_spatial_ll$status[is.na(census_spatial_ll$status)] <- FALSE
+village_df$status[is.na(village_df$status)] <- FALSE
+
+# Resource helpers
+source('lib/helpers.R')
+
+# Get children's spray status
+children <- 
+  left_join(children,
+            census %>% 
+              dplyr::select(uri,
+                            status),
+            by = c('parent_auri' = 'uri'))
+
+# Remove vv_ll's out of district areas
+x <- rgeos::gIntersection(vv_ll,
+                        mop_ll,
+                        byid = TRUE)
+the_data <- vv@data
+x <- SpatialPolygonsDataFrame(Sr = x,
+                              data = the_data,
+                              match.ID = FALSE)
+
+# Overwrite
+vv_ll <- x
+
+# Remove vvb_ll's out of district areas
+x <- rgeos::gIntersection(vvb_ll,
+                        mop_ll,
+                        byid = TRUE)
+the_data <- vvb@data
+x <- SpatialPolygonsDataFrame(Sr = x,
+                              data = the_data,
+                              match.ID = FALSE)
+
+# Overwrite
+vvb_ll <- x
+
+# Remove vvb_ll_spray's out of district areas
+x <- rgeos::gIntersection(vvb_ll_spray,
+                        mop_ll,
+                        byid = TRUE)
+the_data <- vvb_ll_spray@data
+x <- SpatialPolygonsDataFrame(Sr = x,
+                              data = the_data,
+                              match.ID = FALSE)
+
+# Overwrite
+vvb_ll_spray <- x
+
+
+# Remove vvb_spray's out of district areas
+x <- rgeos::gIntersection(vvb_spray,
+                        mop,
+                        byid = TRUE)
+the_data <- vvb_spray@data
+x <- SpatialPolygonsDataFrame(Sr = x,
+                              data = the_data,
+                              match.ID = FALSE)
+
+# Overwrite
+vvb_spray <- x
+
+
+# Remove vv_spray_ll's out of district areas
+x <- rgeos::gIntersection(vv_spray_ll,
+                        mop_ll,
+                        byid = TRUE)
+the_data <- vv_spray_ll@data
+x <- SpatialPolygonsDataFrame(Sr = x,
+                              data = the_data,
+                              match.ID = FALSE)
+
+# Overwrite
+vv_spray_ll <- x
+
+
+# Remove those with no spray status
+children <- 
+  children %>%
+  filter(!is.na(status))
+cols <- colorRampPalette(brewer.pal(9, 'Spectral'))(nrow(vv_ll))
+cols <- sample(cols, length(cols))
+cols <- adjustcolor(cols, alpha.f = 0.9)
+
+```
+
+## Without colors (no buffer)
+
+```{r}
+plot(mop_ll)
+plot(vv_ll, col = 'white', add = TRUE, border = adjustcolor('black', alpha.f = 0.5))
+maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
+# north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
+compassRose(x=36.45, y=-18.15, cex = 0.5)
+```
+
+## With colors (no buffer)
+
+```{r}
+plot(mop_ll)
+plot(vv_ll, col = cols,add = TRUE, border = adjustcolor('black', alpha.f = 0.5))
+plot(mop_ll, add = TRUE)
+maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
+# north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
+compassRose(x=36.45, y=-18.15, cex = 0.5)
+```
+
+We can apply our internal buffers and we get the following:
+
+```{r}
+cols <- colorRampPalette(brewer.pal(9, 'Spectral'))(nrow(vvb_ll))
+cols <- sample(cols, length(cols))
+cols <- adjustcolor(cols, alpha.f = 0.9)
+```
+
+## Without colors (buffer)
+
+```{r}
+plot(mop_ll)
+plot(vvb_ll, col = 'white' ,add = TRUE, border = adjustcolor('black', alpha.f = 0.5))
+plot(mop_ll, add = TRUE)
+maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
+# north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
+compassRose(x=36.45, y=-18.15, cex = 0.5)
+```
+
+## With colors (buffer)
+
+```{r}
+plot(mop_ll)
+plot(vvb_ll, col = cols ,add = TRUE, border = adjustcolor('black', alpha.f = 0.5))
+plot(mop_ll, add = TRUE)
+maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
+# north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
+compassRose(x=36.45, y=-18.15, cex = 0.5)
+```
+
+## With houses too (no colors)
+
+
+```{r}
+color_df <- data_frame(village_number = vvb_ll$village_number,
+                       col = cols)
+the_points <- census_spatial_ll 
+the_points@data <- the_points@data %>%
+  left_join(color_df,
+            by = 'village_number')
+```
+
+```{r}
+plot(mop_ll)
+plot(vvb_ll, col = adjustcolor('white', alpha.f = 0.6),add = TRUE, border = 'black')
+plot(mop_ll, add = TRUE)
+points(the_points,
+       col = adjustcolor('black', alpha.f = 0.2),
+       pch = 3,
+       cex = 0.2)
+maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
+# north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
+compassRose(x=36.45, y=-18.15, cex = 0.5)
+```
+
+## With houses too (with colors)
+
+```{r}
+plot(mop_ll)
+plot(vvb_ll, col = adjustcolor(cols, alpha.f = 0.6),add = TRUE, border = NA)
+plot(mop_ll, add = TRUE)
+points(the_points,
+       col = adjustcolor(the_points@data$col, alpha.f = 0.5),
+       pch = 3,
+       cex = 0.5)
+maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
+# north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
+compassRose(x=36.45, y=-18.15, cex = 0.5)
+```
+
+## Figure 3
+
+Our spray / no-spray map looks like this:
+
+```{r}
+the_data <- vv_spray_ll
+the_colors <- ifelse(the_data@data$status, 'darkred', 'darkgreen')
+the_colors <- adjustcolor(the_colors, alpha.f = 0.6)
+status <- the_data$status
+plot(mop_ll)
+plot(the_data, add = TRUE, col = the_colors, border = adjustcolor('black', alpha.f = 0.5))
+legend(x = 36.5, y = -17.5,
+       fill = the_colors,
+       legend = c('Spray', 'No spray'),
+       cex = 0.8,
+       bty = 'n')
+maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
+# north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
+compassRose(x=36.45, y=-18.15, cex = 0.5)
+```
+
+We add 1 kilometer internal buffers to each border to get the following:
+
+```{r}
+the_data <- vvb_ll_spray
+the_colors <- ifelse(the_data@data$status, 'darkred', 'darkgreen')
+the_colors <- adjustcolor(the_colors, alpha.f = 0.6)
+status <- the_data$status
+plot(mop_ll)
+plot(the_data, col = the_colors, border = adjustcolor('black', alpha.f = 0.5), add = TRUE)
+legend(x = 36.5, y = -17.5,
+       fill = the_colors,
+       legend = c('Spray', 'No spray'),
+       cex = 0.8,
+       bty = 'n')
+maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
+# north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
+compassRose(x=36.45, y=-18.15, cex = 0.5)
+```
+
+We can then add each household onto our surface to visualize in which areas (spray, no-spray, or buffer) each households falls into.
+
+```{r}
+the_data <- vvb_ll_spray
+the_colors <- ifelse(the_data@data$status, 'darkred', 'darkgreen')
+the_colors <- adjustcolor(the_colors, alpha.f = 0.6)
+
+plot(mop_ll)
+plot(the_data, col = the_colors, border = adjustcolor('black', alpha.f = 0.5), add = TRUE)
+
+legend(x = 36.5, y = -17.47,
+       fill = the_colors,
+       legend = c('Spray', 'No spray'),
+       cex = 0.8,
+       bty = 'n',
+       title = 'Zones')
+maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
+# north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
+compassRose(x=36.45, y=-18.15, cex = 0.5)
+
+points(census_spatial_ll,
+       col = ifelse(census_spatial_ll$within_1k_voronoi_buffer_spray, 
+                    'blue',
+                    ifelse(census_spatial_ll$status,
+                           'darkred',
+                           ifelse(!census_spatial_ll$status,
+                                  'darkgreen',
+                                  ifelse(is.na(census_spatial_ll$status), 'darkgreen', NA)))),
+       pch = 3,
+       cex = 0.3)
+legend(x = 35.47, y = -17.445,
+       pch = 3,
+       pt.cex = 0.5,
+       col = c('darkred', 'darkgreen', 'blue'),
+       legend = c('Spray', 'No spray', 'Buffer'),
+       bty= 'n',
+       cex = 0.65,
+       title = 'Houses')
+```
+
