@@ -28,6 +28,9 @@ knitr::opts_chunk$set(comment = NA,
                # fig.height = 5,
                # fig.width = 8,
                fig.align = 'center')
+knitr::opts_chunk$set(
+  fig.path = "images/"
+)
 
 ```
 
@@ -597,7 +600,6 @@ compassRose(x=36.45, y=-18.15, cex = 0.5)
 
 ## With houses too (no colors)
 
-
 ```{r}
 color_df <- data_frame(village_number = vvb_ll$village_number,
                        col = cols)
@@ -618,6 +620,13 @@ points(the_points,
 maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
 # north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
 compassRose(x=36.45, y=-18.15, cex = 0.5)
+legend(x = 35.47, y = -17.445,
+       pch = 3,
+       pt.cex = 0.5,
+       col = c('black'),
+       legend = c('House'),
+       bty= 'n',
+       cex = 0.85)
 ```
 
 ## With houses too (with colors)
@@ -633,6 +642,13 @@ points(the_points,
 maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
 # north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
 compassRose(x=36.45, y=-18.15, cex = 0.5)
+legend(x = 35.47, y = -17.445,
+       pch = 3,
+       pt.cex = 0.5,
+       col = c('black'),
+       legend = c('House'),
+       bty= 'n',
+       cex = 0.85)
 ```
 
 ## Figure 3
