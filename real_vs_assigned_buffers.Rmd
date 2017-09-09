@@ -1,0 +1,583 @@
+---
+title: "Maps with buffers"
+author: "Eldo Elobolobo, Orvahlo Augusto, Joe Brew, Carlos Chaccour, Edgar Jamisse, Charfudin Sacoor, Francisco Saute"
+fig_width: 4
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+fig_height: 2.6
+---
+```{r, echo = FALSE, warning = FALSE, message = FALSE, comment = NA, error= FALSE, cache = FALSE}
+# No scientific notation
+options(scipen=999)
+
+# Packages 
+library(xtable)
+library(knitr)
+library(ggplot2) 
+# library(dplyr)
+library(rgeos)
+library(RColorBrewer)
+library(Rmisc)
+# Libraries
+library(rgdal)
+library(raster)
+library(sp)
+library(leaflet)
+library(ggmap)
+library(readxl)
+library(dplyr)
+library(readr)
+library(geosphere)
+
+# Basic knitr options
+opts_chunk$set(comment = NA, 
+               echo = FALSE, 
+               warning = FALSE, 
+               message = FALSE, 
+               error = TRUE, # Render report, even with errors
+               cache = F)
+
+# Helpers
+source('lib/get_zambezia.R')
+source('lib/helpers.R')
+```
+
+```{r setup, include=FALSE, echo = FALSE}
+library(knitr)
+knit_engines$set(asis = function(options) {
+  if (options$echo && options$eval) knit_child(text = options$code)
+})
+```
+
+
+```{r}
+#### READ IN AND CLEAN UP DATA
+
+# Read in final dataset, as given by Orvahlo on October 24, 2016
+# census <- read_excel('Limpesa_Final__241016_For maps.xlsx')
+# Read in corrected final dataset, sent by Edgar on October 30, 2016
+# census <- read_excel('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.xls')
+census <- read_csv('Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.csv')
+# census <- read_csv('CensusMopeia_DATA_2016-11-11_1355.csv')
+# Fix weird header
+names(census)[6] <- 'locality_Final'
+
+# Get more nicely named geographic coordinate column names
+census$lat <- census$y <- census$latitude <- census$gpc_lat
+census$lon <- census$lng <- census$longitude <-census$x <- census$gpc_lng
+
+# Get a shapefile for Mozambique
+moz <- raster::getData('GADM', country = 'MOZ', level = 3)
+moz2 <- raster::getData('GADM', country = 'MOZ', level = 2)
+
+# GET CORRECT FINAL COLUMNS, AS EXPLAINED IN EMAIL
+# Get a village number
+census$village_number <- census$`village number_final`
+census$administrative_post <- census$administrative_post_final
+census$house_number <- census$houseno_Final_1
+census$locality <- census$locality_Final
+
+# Convert village number to numeric
+census$village_number <- 
+  as.numeric(as.character(census$village_number))
+
+# Get the corrected locality and bairro names sent by edgar on nov 7
+locality_corrections <- read_excel('Mapa Actualizado de bairros Censados_07_11-2016_Edgar-Revisao_FIN.xlsx', skip = 2)
+
+# Join to the census
+x <- 
+  census %>%
+  left_join(locality_corrections,
+            by = c('village_number' = 'CODIGO')) %>%
+  mutate(BAIRRO = toupper(BAIRRO))
+# Make updates
+x <- x %>%
+  mutate(administrative_post = 
+           ifelse(administrative_post != `POSTO ADMIN` & !is.na(`POSTO ADMIN`), 
+                  `POSTO ADMIN`, administrative_post),
+         locality = ifelse(locality != LOCALIDADE & !is.na(LOCALIDADE), 
+                           LOCALIDADE, locality),
+         local_village_name = ifelse(local_village_name != BAIRRO & !is.na(BAIRRO),
+                         BAIRRO, local_village_name)) %>%
+  dplyr::select(-`POSTO ADMIN`, LOCALIDADE, BAIRRO)
+# Overwite census
+census <- x
+rm(x)
+# Remove all NA rows
+census <- census %>%
+  filter(!is.na(lng),
+         !is.na(lat),
+         !is.na(village_number),
+         !is.na(house_number))
+
+
+# Save old version of census
+census_old <- census
+
+# Create a spatial version of census
+census_spatial <- census
+coordinates(census_spatial) <- ~x+y
+proj4string(census_spatial) <- proj4string(moz)
+
+# Subset the shapefile just to Zambezia
+zam <- moz[moz@data$NAME_1 == 'Zambezia',]
+
+# Subset further to just Mopeia
+mop <- moz2[moz2@data$NAME_2 == 'Mopeia',]
+
+# Save the original proj4string
+original_proj4string <- proj4string(moz)
+
+# Prepare ggmap-compatible objects
+zam_fortified <- fortify(zam, id = ID_3)
+mop_fortified <- fortify(mop, id = ID_3)
+zam_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+                               lat = mean(census$lat, na.rm = TRUE)),
+                  maptype = 'satellite')
+mop_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+                               lat = mean(census$lat, na.rm = TRUE)),
+                  maptype = 'satellite')
+
+# Switch to a projected format
+# Project
+census_spatial <- spTransform(census_spatial, CRS( "+init=epsg:3347" ) )
+mop <- spTransform(mop, CRS("+init=epsg:3347"))
+# Later, we can switch back to lat/long:
+census_spatial_ll <- spTransform(census_spatial, CRS("+init=epsg:4326"))
+mop_ll  <- spTransform(mop, CRS("+init=epsg:4326"))
+# proj4string(mop_ll) <- proj4string(zam)
+```
+
+```{r}
+# Read in data at the child-specific level
+children <- read_csv('redcap/CensusMopeia_DATA_2016-11-01_1734.csv')
+
+# Keep only those households with children
+children <- 
+  children %>%
+  filter(!is.na(perm_id_final)) %>%
+  mutate(permid = perm_id_final) %>%
+  dplyr::select(-perm_id_final)
+
+# Keep only those children which appear in the non-problematic census records
+children <-
+  children %>%
+  filter(parent_auri %in% census$uri) 
+
+# Keep only the columns of interest
+children <- 
+  children %>%
+  dplyr::select(permid,
+                dob,
+                name,
+                gender,
+                keeper,
+                parent_auri)
+
+# Get the household id
+children <-
+  children %>%
+  left_join(census %>% 
+              dplyr::select(house_number,
+                            village_number,
+                            uri),
+            by = c('parent_auri' = 'uri'))
+```
+
+
+```{r}
+if('clean_maps_with_buffers_data.RData' %in% dir()){
+  load('clean_maps_with_buffers_data.RData')
+} else {
+  # Get spray status (will use for clusters too)
+  get_spray_status() # produces spray_village (village level) and spray_status (cluster level)
+  
+  # Make a dataframe of just villages (with cluster assignments)
+  village_df <- make_village_df(census = census,
+                                spray_village = spray_village)
+  
+  # Get a distance matrix (takes 2-3 minutes)
+  distance_matrix <- get_distance_matrix(spatial_ll_census = census_spatial_ll)
+  
+  # Identify problems
+  identify_problems()
+  census$problematic <- census$house_number %in% incorrect_houses
+  census_spatial$problematic <- census_spatial$house_number %in% incorrect_houses
+  census_spatial_ll$problematic <- census_spatial_ll$house_number %in% incorrect_houses
+  
+  # SUBSET TO REMOVE PROBLEMATIC
+  # Get distance matrix after subset
+  distance_matrix_old <- distance_matrix
+  distance_matrix <- distance_matrix[!census$problematic,
+                                         !census$problematic]
+  
+  # Identify the nearest neighbors of each house
+  nn <- nearest_neighbor(census_spatial_ll = census_spatial_ll,
+                             distance_matrix_old = distance_matrix_old,
+                             n = 5)
+  census$nearest_neighbors <- nn
+  census_old$nearest_neighbors <- nn
+  census_spatial$nearest_neighbors <- nn
+  census_spatial_ll$nearest_neighbors <- nn
+  
+  # Remove incorrect houses
+  census <- census[which(!census$house_number %in% incorrect_houses),]
+  census_spatial <- census_spatial[which(!census_spatial$house_number %in% incorrect_houses),]
+  census_spatial_ll <- census_spatial_ll[which(!census_spatial_ll$house_number %in% incorrect_houses),]
+  
+  village_df <- village_df %>% filter(!is.na(village_number),
+                                      !duplicated(village_number))
+
+  # Join spray status to objects
+  joiner <- 
+    village_df %>%
+                dplyr::select(village_number, cluster, status)
+  
+  census_spatial_ll@data <-
+    left_join(census_spatial_ll@data,
+              joiner,
+              by = 'village_number')
+  census_spatial@data <-
+    left_join(census_spatial@data,
+              joiner,
+              by = 'village_number')
+  census <-
+    left_join(census,
+              joiner,
+              by = 'village_number')
+  
+  # Get the voronoi tesselation surface
+  vv <- voronoi(spatial_census_ll = census_spatial_ll)
+  # Get the voronoi tesselation surface at the level of the spray zones
+  vv_spray <- voronoi_spray_level(spatial_census_ll = census_spatial_ll)
+  
+  # Get a non lat long version of voronoi surface
+  # For the village level
+  proj4string(vv) <- proj4string(census_spatial_ll)
+  vv_ll <- vv
+  vv <- sp::spTransform(vv, CRSobj = proj4string(census_spatial))
+  
+  # For the spray-level
+  proj4string(vv_spray) <- proj4string(census_spatial_ll)
+  vv_spray_ll <- vv_spray
+  vv_spray <- sp::spTransform(vv_spray, CRSobj = proj4string(census_spatial))
+    
+  # Get the buffered voronoi tesselation surface
+  vvb <- rgeos::gBuffer(vv,  # village level
+                        byid = TRUE, 
+                        id = vv$village_number,
+                        width = -1000)
+  vvb_spray <- rgeos::gBuffer(vv_spray,  # village level
+                        byid = TRUE, 
+                        id = vv$status,
+                        width = -1000)
+  
+  # Convert back to lat lon
+  vvb_ll <- spTransform(vvb, CRSobj = proj4string(census_spatial_ll))
+  vvb_ll_spray <- spTransform(vvb_spray, CRSobj = proj4string(census_spatial_ll))
+  
+  # Identify buffers voronoi
+  census_spatial_ll <- 
+    identify_buffers_voronoi(
+    census_spatial_ll = census_spatial_ll,
+           distance_matrix = distance_matrix,
+           vvb_ll = vvb_ll)
+  
+  # Identify buffers voronoi at spray level
+  census_spatial_ll <- 
+    identify_buffers_voronoi_spray_level(census_spatial_ll = census_spatial_ll,
+           distance_matrix = distance_matrix,
+           vvb_ll_spray = vvb_ll_spray)
+  
+  # Get buffers through distance to other villages
+  census_spatial_ll <- identify_buffers(spatial_ll_census = census_spatial_ll,
+                       distances = distance_matrix)
+  
+  # Update other objects with variables only in census_spatial_ll
+  update_other_objects()
+
+  # Save
+  save.image('clean_maps_with_buffers_data.RData')  
+}
+
+
+# Set all NA statuses to FALSE
+census$status[is.na(census$status)] <- FALSE
+census_spatial$status[is.na(census_spatial$status)] <- FALSE
+census_spatial_ll$status[is.na(census_spatial_ll$status)] <- FALSE
+village_df$status[is.na(village_df$status)] <- FALSE
+
+# Resource helpers
+source('lib/helpers.R')
+
+# Get children's spray status
+children <- 
+  left_join(children,
+            census %>% 
+              dplyr::select(uri,
+                            status),
+            by = c('parent_auri' = 'uri'))
+# Remove those with no spray status
+children <- 
+  children %>%
+  filter(!is.na(status))
+```
+
+
+# Introduction
+
+This document was produced originally on Saturday, September 9, 2017. Its structure is based on the `clean_maps_with_buffers.html` (from November 2016), but with updates to take into account discrepancies between assigned versus real spray statuses. It relies on the database, excel assignment sheets, a `.csv` of in-the-field spray status (ie, "real" spray statuses) sent by Eldo in early September 2017 ("field_status.csv"). Additionally, it uses data sent from Charfudin Sacoor to Joe Brew on the evening of Sunday, October 30th, 2016 (`Casos problematticos resolvidos_Edgar Jamisse_Mopeia_2016_28_10.xlsx`).
+
+
+# Concordance between assigned and real spray statuses
+
+## Table  
+
+The below table show sthe spray assignments and real sprayings.  Variable meanings are as follows:  
+
+- `original_assignment` means the spray status per the original assignment.  
+- `assigned` means the spray status per Eldo's table (ie, `ABT(Spray_list)` in the table sent by Eldo). In theory this should match perfectly with `original_assignment`: it doesn't.  
+- `real` is the actual spray status, ie the `CISM (Random_List)` column in the table sent by Eldo.  
+
+```{r}
+# Read in data sent from eldo
+eldo <- read_csv('field_status.csv') %>%
+  mutate(village_number = as.numeric(Village_id)) %>%
+  rename(assigned = `ABT(Spray_list)`,
+         real = `CISM (Random_List)`) %>%
+  dplyr::select(village_number, assigned, real)
+
+# Join to village df
+village_df <-
+  left_join(village_df,
+            eldo)
+
+village_df <-
+  village_df %>%
+  mutate(original_assignment = ifelse(status, 'Spray', 'No_Spray'))
+
+DT::datatable(village_df %>%
+                dplyr::select(village_number,
+                              original_assignment,
+                              assigned,
+                              real))
+```
+
+Because of the discrepancy between `assigned` (Eldo) and `original_assignment` (Joe), I'm going to assume that `assigned` is correct, and that `original_assignment` is incorrect.
+
+## Contingency table  
+
+```{r}
+concordance <- left_join(x = census,
+                         y = village_df,
+                         by = 'village_number')
+
+table(paste0('Assigned ', concordance$assigned), 
+      paste0('Received ', concordance$real))
+```
+
+## Maps
+
+The below map has one point for each household. The color indicates whether its status is "OK" (got what it should have) or "Mismatch".
+
+```{r}
+
+
+# Get a color code
+concordance <- 
+  concordance %>%
+  mutate(outcome = ifelse(assigned == 'Spray' &
+                          real == 'Spray', 'OK: Spray',
+                        ifelse(assigned == 'Spray' &
+                                 real != 'Spray', 'Mismatch: should have gotten sprayed but did not',
+                               ifelse(assigned != 'Spray' &
+                                        real == 'Spray', 'Mismatch: should not have gotten sprayed but did',
+                                      ifelse(assigned != 'Spray' &
+                                               real != 'Spray', 'OK: No spray', 
+                                             'No assignment or outcome')))))
+
+
+ggplot() +
+  geom_polygon(data = mop_fortified,
+               aes(x = long,
+                   y = lat,
+                   group = group)) +
+  geom_point(data = concordance,
+             aes(x = longitude,
+                 y = latitude,
+                 color = outcome),
+             alpha = 0.7,
+             size = 0.3) +
+  ggthemes::theme_map() +
+  theme(legend.position = 'bottom',
+        legend.text = element_text(size = 8)) +
+  
+  guides(color=guide_legend(ncol=3))
+```
+
+## Re-tesselation  
+
+Our original buffers are no longer valid, given the presence of spraying in no-spray zones, and the presence of non-sprayed houses in spray zones. We therefore re-draw boundaries and buffers based on the "real" status of each household.
+
+The below map shows the "real" spray vs no spray zones
+
+```{r}
+concordance_spatial <- concordance
+# Overwrite status with new status
+concordance_spatial$status <- concordance_spatial$real
+concordance_spatial$status <- ifelse(concordance_spatial$status == 'Spray', TRUE, FALSE)
+coordinates(concordance_spatial) <- ~longitude+latitude
+xx <- voronoi_spray_level(spatial_census_ll = concordance_spatial)
+status <- xx$status
+
+plot(xx, col = adjustcolor(ifelse(xx$status, 'darkred', 'darkgreen'), alpha.f = 0.6), border = adjustcolor('black', alpha.f = 0.5))
+legend('bottomright',
+       fill = adjustcolor(c('darkred', 'darkgreen'), alpha.f = 0.6),
+       legend = c('Spray', 'No spray'))
+```
+
+Compare that to our original assignment below.
+
+```{r}
+the_data <- vv_spray_ll
+the_colors <- ifelse(the_data@data$status, 'darkred', 'darkgreen')
+the_colors <- adjustcolor(the_colors, alpha.f = 0.6)
+status <- the_data$status
+plot(mop_ll)
+plot(the_data, add = TRUE, col = the_colors, border = adjustcolor('black', alpha.f = 0.5))
+legend('bottomright',
+       fill = the_colors,
+       legend = c('Spray', 'No spray'))
+```
+
+We need to buffer the "real" assignments. The result is as follows:
+
+```{r}
+proj4string(concordance_spatial) <-
+  proj4string(moz)
+# For the spray-level
+xx_spray <- xx
+proj4string(xx_spray) <- proj4string(moz)
+xx_spray_ll <- xx_spray
+xx_spray <- sp::spTransform(xx_spray, CRSobj = proj4string(vvb))
+  
+# Get the buffered voronoi tesselation surface
+xxb_spray <- rgeos::gBuffer(xx_spray, 
+                      byid = TRUE, 
+                      id = xx$status,
+                      width = -1000)
+
+# Convert back to lat lon
+xxb_ll_spray <- spTransform(xxb_spray, CRSobj = proj4string(concordance_spatial))
+
+plot(mop_ll)
+plot(xxb_ll_spray, col = adjustcolor(ifelse(status, 'darkred', 'darkgreen'), alpha.f = 0.6), border = adjustcolor('black', alpha.f = 0.5),
+     add = TRUE)
+legend('bottomright',
+       fill = adjustcolor(c('darkred', 'darkgreen'), alpha.f = 0.6),
+       legend = c('Spray', 'No spray'))
+```
+
+Compare that to our original buffered spray assignments below.
+
+
+```{r}
+vvb_ll_spray <- spTransform(vvb_ll_spray,
+                            CRSobj = proj4string(xxb_ll_spray))
+the_data <- vvb_ll_spray
+the_colors <- ifelse(the_data@data$status, 'darkred', 'darkgreen')
+the_colors <- adjustcolor(the_colors, alpha.f = 0.6)
+status <- the_data$status
+plot(mop_ll)
+plot(the_data, col = the_colors, border = adjustcolor('black', alpha.f = 0.5), add = TRUE)
+legend('bottomright',
+       fill = the_colors,
+       legend = c('Spray', 'No spray'))
+```
+
+## Spatial overlay
+
+The below map shows the overlay of both the original assignments and the real results. The original assignments are shown in diagonal lines, whereas the reality is shown in fill.
+
+```{r}
+plot(vvb_ll_spray,
+     col = adjustcolor(ifelse(status, 'darkred', 'darkgreen'), alpha.f = 0.9),
+     angle = 45,
+     density = 20)
+plot(xxb_ll_spray,
+     add = TRUE,
+     col = adjustcolor(ifelse(status, 'darkred', 'darkgreen'), alpha.f = 0.5))
+```
+
+## Sub-overlay
+
+### Spray zones
+
+```{r}
+
+xx_spray <- xxb_ll_spray[xxb_ll_spray$status,]
+vv_spray <- vvb_ll_spray[vvb_ll_spray$status,]
+xx_no_spray <- xxb_ll_spray[!xxb_ll_spray$status,]
+vv_no_spray <- vvb_ll_spray[!vvb_ll_spray$status,]
+
+par(mfrow = c(1,2))
+
+plot(vv_spray, col = 'red', main = 'Assigned')
+plot(xx_spray, col = 'red', main = 'Real')
+par(mfrow = c(1,1))
+```
+
+### Non-spray zones
+
+```{r}
+par(mfrow = c(1,2))
+
+plot(vv_no_spray, col = 'green', main = 'Assigned')
+plot(xx_no_spray, col = 'green', main = 'Real')
+par(mfrow = c(1,1))
+```
+
+### Assigned spray, received no spray
+
+```{r}
+mismatch <- gDifference(xx_no_spray,
+                           vv_no_spray)
+plot(mop_ll)
+plot(mismatch, col = 'blue', add = TRUE)
+```
+
+### Assigned no spray, received spray
+
+```{r}
+mismatch <- gDifference(xx_spray,
+                           vv_spray)
+plot(mop_ll)
+plot(mismatch, col = 'blue', add = TRUE)
+```
+
+
+# Further data products
+
+Given the above overlays, we can define which households are in original vs. real spray/no-spray/buffer zones. These data will be saved and sent separately in machine-readable format (ie, `.csv`). 
+
+```{r}
+concordance %>%
+  dplyr::select(house_number,
+                assigned,
+                real) %>%
+  mutate(concordance = ifelse(assigned == real, 'OK', 'NOT OK')) %>%
+  sample_n(100) %>%
+  
+  DT::datatable()
+```
+
+# Code 
+
+Full code at https://github.com/joebrew/zambezia.
+
+

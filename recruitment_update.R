@@ -4,11 +4,23 @@ library(tidyverse)
 library(readr)
 library(yaml)
 
+# Read in old data
 master <- read_csv('data/cost-mopeia.csv')
+headers <- read_csv('data/COSTMopeia_DATA_2017-03-24_1021.csv')[0,]
+
+# Read in new data
+cost_acd <- read_csv('data/COST_ACD.csv')
+cost_acd_followup <- read_csv('data/COST_ACD_FOLLOWUP.csv')
+cost_acd_followup2 <- read_csv('data/COST_ACD_FOLLOWUPv062017.csv')
+cost_pcd <- read_csv('data/COST_PCDV062017.csv')
+all_names <- c(names(cost_acd),
+               names(cost_acd_followup),
+               names(cost_acd_followup2),
+               names(cost_pcd))
+
 
 # Read an old file just to get headers
 # headers <- read_csv('data/COSTMopeia_DATA_2017-03-08_1751.csv')[0,]
-headers <- read_csv('data/COSTMopeia_DATA_2017-03-24_1021.csv')[0,]
 
 # # See what recruitment data we already have
 # files <- dir('data/')
@@ -83,6 +95,8 @@ for (i in 1:length(arms)){
          df)
 }
 rm(df)
+
+# READ IN NEW DATA
 
 # Get agregardos 
 agregados <- master %>%

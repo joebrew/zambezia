@@ -3,8 +3,8 @@ title: "Publication-quality visualizations for Mopeia COST study"
 author: "Brew"
 date: '`r Sys.Date()`'
 output:
-  html_document: default
   pdf_document: default
+  html_document: default
 self_contained: no
 subtitle: Reproducible code and output
 link-citations: yes
