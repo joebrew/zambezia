@@ -731,3 +731,17 @@ legend(x = 35.47, y = -17.445,
        title = 'Houses')
 ```
 
+```{r}
+# vv_spray_ll # without borders
+# vvb_ll_spray # with borders
+# Write shapefiles
+library(rgdal)
+writeOGR(obj=vv_spray_ll, 
+         dsn="vv_spray_ll", 
+         layer = 'vv_spray_ll',
+         driver="ESRI Shapefile")
+writeOGR(obj=vvb_spray_ll, 
+         dsn="vvb_spray_ll", 
+         layer = 'vvb_spray_ll',
+         driver="ESRI Shapefile")
+```

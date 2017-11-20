@@ -1,0 +1,241 @@
+---
+title: "Mopeia HLC visualizations"
+author: "Brew, Chaccour"
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    theme: united
+  pdf_document: default
+self_contained: no
+subtitle: 
+link-citations: yes
+---
+
+All code is available at https://github.com/joebrew/zambezia. Of note, a requisite shapefile is created in `visualizations.Rmd` which is called herein.
+
+
+
+```{r setup, include=FALSE}
+library(tufte)
+# invalidate cache when the tufte version changes
+knitr::opts_chunk$set(tidy = FALSE, cache.extra = packageVersion('tufte'))
+options(htmltools.dir.version = FALSE)
+
+knitr::opts_chunk$set(comment = NA, 
+               echo = FALSE, 
+               warning = FALSE, 
+               message = FALSE, 
+               error = TRUE, 
+               # fig.height = 5,
+               # fig.width = 8,
+               fig.align = 'center')
+
+```
+
+```{r}
+# Define theme for plotting
+# Borrowed from https://rpubs.com/Koundy/71792
+theme_publication <- function(base_size=14) {
+  library(grid)
+  library(ggthemes)
+  (theme_foundation(base_size=base_size)
+    + theme(plot.title = element_text(face = "bold",
+                                      size = rel(1.2), hjust = 0.5),
+            text = element_text(),
+            panel.background = element_rect(colour = NA),
+            plot.background = element_rect(colour = NA),
+            panel.border = element_rect(colour = NA),
+            axis.title = element_text(face = "bold",size = rel(1)),
+            axis.title.y = element_text(angle=90,vjust =2),
+            axis.title.x = element_text(vjust = -0.2),
+            axis.text = element_text(), 
+            axis.line = element_line(colour="black"),
+            axis.ticks = element_line(),
+            panel.grid.major = element_line(colour="#f0f0f0"),
+            panel.grid.minor = element_blank(),
+            legend.key = element_rect(colour = NA),
+            legend.position = "bottom",
+            legend.direction = "horizontal",
+            legend.key.size= unit(0.5, "cm"),
+            legend.margin = unit(0, "cm"),
+            legend.title = element_text(face="italic"),
+            plot.margin=unit(c(10,5,5,5),"mm"),
+            strip.background=element_rect(colour="#f0f0f0",fill="#f0f0f0"),
+            strip.text = element_text(face="bold")
+    ))
+}
+
+colors <- colorRampPalette(c('orange', 'red', 'darkgrey'))(3)
+
+scale_fill_publication <- function(...){
+  library(scales)
+  discrete_scale("fill",
+                 "Publication",
+                 manual_pal(values = colors
+                              # c("#386cb0","#fdb462","#7fc97f","#ef3b2c","#662506","#a6cee3","#fb9a99","#984ea3","#ffff33")
+                            ), ...)
+  
+}
+
+scale_colour_publication <- function(...){
+  library(scales)
+  discrete_scale("colour",
+                 "Publication",
+                 manual_pal(values = colors
+                            # c("#386cb0","#fdb462","#7fc97f","#ef3b2c","#662506","#a6cee3","#fb9a99","#984ea3","#ffff33")
+                            ), ...)
+  
+}
+
+compassRose<-function(x,y,rot=0,cex=1) {
+  oldcex<-par(cex=cex)
+  mheight<-strheight("M")
+  xylim<-par("usr")
+  plotdim<-par("pin")
+  xmult<-(xylim[2]-xylim[1])/(xylim[4]-xylim[3])*plotdim[2]/plotdim[1]
+  point.angles<-seq(0,7*pi/4,by=pi/4)+pi*rot/180
+  crspans<-rep(c(mheight*3,mheight/2),4)
+  xpoints<-cos(point.angles)*crspans*xmult+x
+  ypoints<-sin(point.angles)*crspans+y
+  polygon(xpoints,ypoints)
+  txtxpoints<-cos(point.angles[c(1,3,5,7)])*1.33*crspans[1]*xmult+x
+  txtypoints<-sin(point.angles[c(1,3,5,7)])*1.33*crspans[1]+y
+  text(txtxpoints,txtypoints,c("E","N","W","S"))
+  par(oldcex)
+}
+
+library(cism)
+library(sp)
+library(tidyverse)
+library(broom)
+library(maptools)
+library(RColorBrewer)
+library(ggrepel)
+library(GISTools)  
+library(maps)
+library(rgdal)
+
+# Read in shape files created in visualization.Rmd
+vv_spray_ll <- readOGR('vv_spray_ll', 'vv_spray_ll', verbose = FALSE)
+# vvb_spray_ll <- readOGR('vvb_spray_ll', 'vvb_spray_ll')
+
+```
+
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE, comment = NA, error= FALSE, cache = FALSE}
+# No scientific notation
+options(scipen=999)
+
+# Packages 
+library(xtable)
+library(knitr)
+library(ggplot2) 
+# library(dplyr)
+library(rgeos)
+library(RColorBrewer)
+library(Rmisc)
+# Libraries
+library(rgdal)
+library(raster)
+library(sp)
+library(leaflet)
+library(ggmap)
+library(readxl)
+library(dplyr)
+library(readr)
+library(geosphere)
+
+# Basic knitr options
+opts_chunk$set(comment = NA, 
+               echo = FALSE, 
+               warning = FALSE, 
+               message = FALSE, 
+               error = TRUE, # Render report, even with errors
+               cache = F)
+# Read in excel sent by Chaccour, 2017 November
+library(readxl)
+control <- read_excel('Mopeia  Lista de Casas de CDC Mopeia FINAL KV_Share.xlsx',
+                      sheet = "CASAS CDC MOPEIA CONT 3 SET 17", skip = 5) %>%
+  mutate(lng = Longitude,
+         lat = Latitude,
+         type = 'Control') %>%
+  dplyr::select(type, lng, lat)
+intervention  <- read_excel('Mopeia  Lista de Casas de CDC Mopeia FINAL KV_Share.xlsx',
+                      sheet = "CASAS CDC MOPEIA INTE 3 SET 17", skip = 6) %>%
+  mutate(lng = Longitude,
+         lat = Latitude,
+         type = 'Intervention') %>%
+  dplyr::select(type, lng, lat)
+hlc  <- read_excel('Mopeia  Lista de Casas de CDC Mopeia FINAL KV_Share.xlsx',
+                      sheet = "HLC MOPEIA", skip = 0) %>%
+  mutate(lng = Longitude,
+         lat = Latitude,
+         type = 'Mopeia HLC')
+hlc <- hlc %>%
+  dplyr::select(type, lng, lat)
+hlc$type <- 'MOPEIA HLC'
+xl <- bind_rows(control, intervention, hlc)
+xl <- xl %>% filter(!grepl('Longitude|Latitude', lng))
+xl <- xl %>% filter(!is.na(lng))
+# Define function for cleaning lng/lat
+clean_up <- function(x){
+  x <- gsub(' ͦ','.',x )
+  x <- gsub(' ', '', x)
+  x <- gsub("'", '', x, fixed = TRUE)
+  x_split <- strsplit(x, '.', fixed = TRUE)
+  x <- as.numeric(unlist(lapply(x_split, function(z){
+    paste0(z[1],
+           '.',
+           gsub('0.', '', as.numeric(paste0(z[2], '.', z[3])) / 60, fixed = TRUE)
+           )})))
+  # x <- gsub('.', '', x, fixed = TRUE)
+  x <- as.numeric(x)
+  return(x)
+}
+xl$lat <- clean_up(xl$lat)
+xl$lng <- clean_up(xl$lng)
+xl$lat <- xl$lat * -1
+```
+
+
+```{r}
+the_data <- vv_spray_ll
+the_colors <- ifelse(the_data@data$status == 1, 'darkred', 'darkgreen')
+the_colors <- adjustcolor(the_colors, alpha.f = 0.6)
+status <- the_data$status
+plot(the_data, col = the_colors, border = adjustcolor('black', alpha.f = 0.5))
+the_data$color <- the_colors
+legend(x = 36.5, y = -17.5,
+       fill = the_colors,
+       legend = c('Spray', 'No spray'),
+       cex = 0.8,
+       bty = 'n')
+maps::map.scale(x=35.3, y=-18.1, ratio=FALSE, relwidth=0.18)  
+# north.arrow(xb=35.8, yb=-18.2, len=0.05, lab="N")  
+compassRose(x=36.45, y=-18.15, cex = 0.5)
+points(xl$lng,
+       xl$lat,
+       col = ifelse(xl$type == 'Control', 'blue', ifelse(xl$type == 'Intervention', 'orange', 'purple')))
+legend('topleft',
+       pch = 1,
+       bty = 'n',
+       cex = 0.6,
+       col = c('blue', 'orange', 'purple'),
+       legend = c('Control', 'Intervention', 'HLC'))
+```
+
+```{r}
+xl$color <- ifelse(xl$type == 'Control', 'blue', ifelse(xl$type == 'Intervention', 'orange', 'purple'))
+leaflet() %>%
+  addProviderTiles('Esri.NatGeoWorldMap') %>%
+  addPolygons(data = the_data,
+              color = 'black',
+              weight = 1,
+              fillColor = c('green', 'red')) %>%
+  addCircleMarkers(#map = xl %>% filter(!is.na(lng)),
+                   lng = xl$lng,
+                   lat = xl$lat,
+                   radius = 1,
+                   color = xl$color,
+                   popup = paste0(xl$type))
+```
