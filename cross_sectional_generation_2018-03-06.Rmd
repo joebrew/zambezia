@@ -1,0 +1,277 @@
+---
+title: "Recruitment update"
+author: "Carlos Chaccour, Joe Brew"
+date: "`r paste0(format(Sys.time(), '%d %B, %Y at %H:%M:%S'), '. Time zone: ', Sys.timezone())`"
+fig_height: 2.6
+fig_width: 4
+output:
+  html_document:
+    pandoc_args: [
+      "+RTS", "-K16000m",
+      "-RTS"
+    ]
+    toc: true
+    toc_float: true
+    theme: sandstone
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(comment = NA, 
+               echo = FALSE, 
+               warning = FALSE, 
+               message = FALSE, 
+               error = TRUE, # Render report, even with errors
+               cache = F)
+
+library(tidyverse)
+library(cism)
+library(data.table)
+library(ggplot2)
+library(automap)
+library(akima)
+library(RColorBrewer)
+
+clean_perm_id <- function(perm_id){
+  x <- strsplit(perm_id, '-')
+  y <- lapply(x, 
+         function(x){
+           as.numeric(as.character(x))
+         })
+  z <- lapply(y, function(a){
+    paste0(a, collapse = '-')
+  })
+  zz <- unlist(z)
+  return(zz)
+}
+```
+
+
+```{r}
+# Source the file read-in
+source('recruitment_update.R')
+
+# Recode hf_id
+hf_id_df <- 
+  data_frame(hf_id = 1:12,
+             hf = c(letters[1:12]))
+pcd <- pcd %>%
+  mutate(hf_id = as.numeric(hf_id)) %>%
+  left_join(hf_id_df)
+
+# Clean up data
+pcd <- pcd %>%
+  mutate(tdr = ifelse(tdr == 1, 'Got RDT',
+                      ifelse(tdr == 2, 'No RDT', NA)),
+         tdr_res = ifelse(tdr_res == 1, 'Positive',
+                          ifelse(tdr_res == 2, 'Negative', NA)))
+
+# Filter only under 5s for pcd
+pcd <- pcd %>%
+  filter(age == 1)
+
+# Define simple function for plotting
+simple_plot <- function(var, data = NULL){
+  if(is.null(data)){
+    data <- pcd
+  }
+  x <- data %>%
+  group_by_(var) %>%
+  tally %>%
+  mutate(p = n / sum(n) * 100) %>%
+    rename_(x = var)
+return(ggplot(data = x,
+       aes(x = x,
+           y = n)) +
+  geom_bar(stat = 'identity',
+           fill = 'darkorange',
+           alpha = 0.6) +
+    geom_label(aes(label = paste0(round(p, digits = 2), '%'))) +
+  theme_cism())
+}
+
+# Get village centroids
+village_centroids <- master_table %>%
+  group_by(village = village_number) %>%
+  summarise(lng = mean(lng, na.rm = TRUE),
+            lat = mean(lat, na.rm = TRUE),
+            n = n())
+
+# Get map of mop
+library(cism)
+moz2 <- moz2
+zam <- moz2_fortified %>%
+  filter(id == 'Mopeia')
+zam_sp <- moz2[moz2@data$NAME_2 == 'Mopeia',]
+
+moz2 <- raster::getData('GADM', country = 'MOZ', level = 2)
+# Make visit_date a date object
+pcd$visit_date <- as.Date(pcd$visit_date)
+```
+
+```{r}
+# Get participants for the cross
+
+# Read in some saved objects from the December  
+# Save clusters and census for january revisions
+load('selected_clusters.RData')
+load('children.RData')
+load('census.RData')
+
+# So, we can sample children at individual level, but for adults, 
+# we'll need to just select a house
+
+if('cross_sectional2.RData' %in% dir('backups')){
+  load('backups/cross_sectional2.RData') 
+  load('backups/cross_sectional_target_numbers2.RData')
+  } else {
+    
+  # set.seed(123)
+  set.seed(456)
+
+  # Get households by cluster
+  selected <- 
+    census %>%
+                dplyr::select(uri, 
+                              house_number,
+                              health_facility,
+                              cluster,
+                              lng,
+                              lat,
+                              within_1k_voronoi_buffer,
+                              village,
+                  cluster,
+                  head_name,
+                  local_village_name,
+                  number_of_children,
+                  number_of_residents,
+                  administrative_post) %>%
+    mutate(number_of_adults = number_of_residents - number_of_children) %>%
+    # Bring in the cluster info to children
+    left_join(clusters %>%
+                dplyr::select(cluster,
+                              size,
+                              spray_status),
+              by = 'cluster') %>%
+    # Filter out those whose spray status is not known
+    filter(!is.na(spray_status)) %>%
+    # Filter out those who are not in the core area
+    filter(!within_1k_voronoi_buffer) 
+  # Randomly re-shuffle order
+  selected <- selected[sample(1:nrow(selected), nrow(selected)),]
+  
+  
+  
+  # # Get the kids that are in each house
+  # right <- children %>%
+  #   mutate(in_acd = clean_perm_id(permid) %in%
+  #               unique(clean_perm_id(acd$perm_id))) %>%
+  #   filter(!in_acd) 
+  # right <- right %>%
+  #   sample_n(nrow(right)) %>%
+  #   mutate(dummy = 1) %>%
+  #   group_by(parent_auri) %>%
+  #   summarise(children = paste0(cumsum(dummy), ' ', name, collapse = ', '))
+  # 
+  # selected <- 
+  #   selected %>%
+  #   left_join(right,
+  #             by = c('uri' = 'parent_auri')) %>%
+  #   mutate(children = if_else(is.na(children), 
+  #                             'No children',
+  #                             children))
+  
+  # Order by cluster
+  selected <- selected %>%
+    arrange(cluster)
+  
+  # remove extra variables
+  selected <- 
+    selected %>%
+    dplyr::select(-within_1k_voronoi_buffer,
+                  -village)
+  
+  # Perform a random selection, stratifying by cluster size
+  vals <- rep(c(128, 128, 129), 2)
+  counter <- 0
+  # Get a random_selection
+  results <- list()
+  sss <- c('No spray', 'Spray')
+  szs <- c('Small', 'Medium', 'Large')
+  for(ss in 1:length(sss)){
+    for(sz in 1:length(szs)){
+      counter <- counter + 1
+      message(counter)
+      message(paste0('ss = ', ss))
+      message(paste0('sz = ', sz))
+      val <- vals[counter]
+      # Get a selection
+      sub_data <- 
+        selected %>%
+        filter(spray_status == sss[ss],
+               size == szs[sz])
+      this_selection <- sub_data[sample(1:nrow(sub_data), val),]
+      results[[counter]] <- this_selection
+    }
+  }
+  pseudo_selected <- bind_rows(results)
+  
+    # Now that we've gotten a random selection, let's 
+  # produce "target numbers" by house
+  target_numbers <- 
+    selected %>%
+    group_by(cluster) %>%
+    summarise(n_houses_in_cluster = length(unique(uri)),
+              size = first(size),
+              villages = paste0(unique(local_village_name), collapse = ', '),
+              health_facilities = paste0(unique(health_facility), collapse = ', '),
+              administrative_posts = paste0(unique(administrative_post), collapse = ', ')) %>%
+    left_join(
+      pseudo_selected %>%
+        group_by(cluster) %>%
+        summarise(target_number = length(unique(uri)))
+    )
+    target_numbers$target_number  <- 
+      ifelse(is.na(target_numbers$target_number), 
+              0, 
+             target_numbers$target_number)
+    
+    # Get number of fieldworkers needed
+    target_numbers$n_fieldworkers <-
+      (target_numbers$target_number %/% 5) + 1
+    
+  
+  # Get target for cluster
+  selected <-
+    selected %>%
+    left_join(target_numbers)
+  
+  # Ensure random order
+  selected <- selected %>%
+    mutate(x = 1:nrow(selected))
+  selected <- selected[sample(1:nrow(selected), nrow(selected)),]
+  
+  # Arrange by cluster
+  selected <- selected %>%
+    arrange(cluster)
+  
+  # Assign a visit order number
+  selected <- 
+    selected %>%
+    dplyr::select(-x) %>%
+    group_by(cluster) %>%
+    mutate(visit_number = 1:n()) %>%
+    ungroup
+  
+  # Save
+  save(selected, file = 'backups/cross_sectional3.RData')
+  write_csv(selected, 'backups/cross_sectional3.csv')
+  save(target_numbers, file = 'backups/cross_sectional_target_numbers3.RData')
+  write_csv(target_numbers, 'backups/cross_sectional_target_numbers3.csv')
+  }
+save(selected, file = paste0('backups/cross_sectional_3',
+                             Sys.Date(),
+                             '.RData'))
+save(target_numbers, file = paste0('backups/cross_sectional_target_numbers_3',
+                             Sys.Date(),
+                             '.RData'))
+```
