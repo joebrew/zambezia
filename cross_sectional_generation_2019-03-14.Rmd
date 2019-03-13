@@ -1,6 +1,6 @@
 ---
-title: "Recruitment update"
-author: "Carlos Chaccour, Joe Brew"
+title: "Cross-sectional randomization"
+author: "Joe Brew"
 date: "`r paste0(format(Sys.time(), '%d %B, %Y at %H:%M:%S'), '. Time zone: ', Sys.timezone())`"
 fig_height: 2.6
 fig_width: 4
@@ -125,8 +125,9 @@ if('cross_sectional2.RData' %in% dir('backups')){
   load('backups/cross_sectional_target_numbers2.RData')
   } else {
     
-  # set.seed(123)
-  set.seed(456)
+  # set.seed(123) # 2017
+  # set.seed(456) # 2018
+    set.seed(789) # 2019
 
   # Get households by cluster
   selected <- 
@@ -263,15 +264,15 @@ if('cross_sectional2.RData' %in% dir('backups')){
     ungroup
   
   # Save
-  save(selected, file = 'backups/cross_sectional3.RData')
-  write_csv(selected, 'backups/cross_sectional3.csv')
-  save(target_numbers, file = 'backups/cross_sectional_target_numbers3.RData')
-  write_csv(target_numbers, 'backups/cross_sectional_target_numbers3.csv')
+  save(selected, file = 'backups/cross_sectional4.RData')
+  write_csv(selected, 'backups/cross_sectional4.csv')
+  save(target_numbers, file = 'backups/cross_sectional_target_numbers4.RData')
+  write_csv(target_numbers, 'backups/cross_sectional_target_numbers4.csv')
   }
-save(selected, file = paste0('backups/cross_sectional_3',
+save(selected, file = paste0('backups/cross_sectional_4',
                              Sys.Date(),
                              '.RData'))
-save(target_numbers, file = paste0('backups/cross_sectional_target_numbers_3',
+save(target_numbers, file = paste0('backups/cross_sectional_target_numbers_4',
                              Sys.Date(),
                              '.RData'))
 ```

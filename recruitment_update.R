@@ -6,7 +6,7 @@ library(yaml)
 
 # Read in old data
 master <- read_csv('data/cost-mopeia.csv')
-headers <- read_csv('data/COSTMopeia_DATA_2017-03-24_1021.csv')[0,]
+# headers <- read_csv('data/COSTMopeia_DATA_2017-03-24_1021.csv')[0,]
 
 # Read in new data
 cost_acd <- read_csv('data/COST_ACD.csv')
@@ -59,7 +59,7 @@ all_names <- c(names(cost_acd),
 no_name <- length(which(is.na(names(master))))
 
 # Read in geogrpahic and demographic data
-master_table <- read_csv("~/Documents/zambezia/master_table_for_carlos.csv")
+master_table <- read_csv("~/Documents/zambezia/data/master_table_for_carlos.csv")
 
 # Get spray status
 ss <- master_table %>% 

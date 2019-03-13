@@ -136,12 +136,12 @@ original_proj4string <- proj4string(moz)
 # Prepare ggmap-compatible objects
 zam_fortified <- fortify(zam, id = ID_3)
 mop_fortified <- fortify(mop, id = ID_3)
-zam_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
-                               lat = mean(census$lat, na.rm = TRUE)),
-                  maptype = 'satellite')
-mop_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
-                               lat = mean(census$lat, na.rm = TRUE)),
-                  maptype = 'satellite')
+# zam_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+#                                lat = mean(census$lat, na.rm = TRUE)),
+#                   maptype = 'satellite')
+# mop_gg <- get_map(location = c(lon = mean(census$lon, na.rm = TRUE),
+#                                lat = mean(census$lat, na.rm = TRUE)),
+#                   maptype = 'satellite')
 
 # Switch to a projected format
 # Project
@@ -325,9 +325,15 @@ children <-
 # Read in the coordinates of health centers
 us <- read.csv('unidades_sanitarias_cleaned.csv')
 # Make spatial
-us$x <- us$lng <- us$lon <- us$longitude <- us$gpc_lng
-us$y <- us$lat <- us$latitude <- us$gpc_lat
+# us <- cism::us
+us$x <- us$lng <- us$lon <- us$xx <- us$longitude <- us$gpc_lng
+us$y <- us$lat <- us$yy <- us$latitude <- us$gpc_lat
+us <- us[,!grepl('X', names(us))]
+names(us)[1:2] <- c('pos_adm_health_facility', 'loc_health_facility')
 coordinates(us) <- ~gpc_lng+gpc_lat
+# us <- us[!is.na(us$x),]
+# coordinates(us) <- ~xx+yy
+
 ```
 
 # Health facility locations
@@ -336,7 +342,7 @@ coordinates(us) <- ~gpc_lng+gpc_lat
 
 The below table shows the coordinates, localidades and postos administrativos of the 12 health facilities in Mopeia.
 
-```{r}
+```{r, eval = FALSE}
 x <- us@data
 x <- x %>% dplyr::select(health_facility,
                          loc_health_facility,
